@@ -1,0 +1,56 @@
+=== Starting TriCore Architecture Benchmark on CUDA ===
+[TriCore (Full 3-in-1)] Step 001/600 | Val Loss: 3.9247 | Recall Acc: 2.0%
+[TriCore (Full 3-in-1)] Step 050/600 | Val Loss: 3.4637 | Recall Acc: 3.1%
+[TriCore (Full 3-in-1)] Step 100/600 | Val Loss: 0.0513 | Recall Acc: 100.0%
+[TriCore (Full 3-in-1)] Step 150/600 | Val Loss: 0.0042 | Recall Acc: 100.0%
+[TriCore (Full 3-in-1)] Step 200/600 | Val Loss: 0.0026 | Recall Acc: 100.0%
+[TriCore (Full 3-in-1)] Step 250/600 | Val Loss: 0.0020 | Recall Acc: 100.0%
+[TriCore (Full 3-in-1)] Step 300/600 | Val Loss: 0.0017 | Recall Acc: 100.0%
+[TriCore (Full 3-in-1)] Step 350/600 | Val Loss: 0.0015 | Recall Acc: 100.0%
+[TriCore (Full 3-in-1)] Step 400/600 | Val Loss: 0.0013 | Recall Acc: 100.0%
+[TriCore (Full 3-in-1)] Step 450/600 | Val Loss: 0.0012 | Recall Acc: 100.0%
+[TriCore (Full 3-in-1)] Step 500/600 | Val Loss: 0.0012 | Recall Acc: 100.0%
+[TriCore (Full 3-in-1)] Step 550/600 | Val Loss: 0.0012 | Recall Acc: 100.0%
+[TriCore (Full 3-in-1)] Step 600/600 | Val Loss: 0.0012 | Recall Acc: 100.0%
+[TriCore (No Fast-Weight)] Step 001/600 | Val Loss: 3.9223 | Recall Acc: 2.3%
+[TriCore (No Fast-Weight)] Step 050/600 | Val Loss: 3.4751 | Recall Acc: 3.4%
+[TriCore (No Fast-Weight)] Step 100/600 | Val Loss: 3.4511 | Recall Acc: 2.2%
+[TriCore (No Fast-Weight)] Step 150/600 | Val Loss: 3.4598 | Recall Acc: 3.9%
+[TriCore (No Fast-Weight)] Step 200/600 | Val Loss: 3.4555 | Recall Acc: 3.4%
+[TriCore (No Fast-Weight)] Step 250/600 | Val Loss: 3.4518 | Recall Acc: 3.1%
+[TriCore (No Fast-Weight)] Step 300/600 | Val Loss: 3.4460 | Recall Acc: 3.1%
+[TriCore (No Fast-Weight)] Step 350/600 | Val Loss: 3.4435 | Recall Acc: 2.0%
+[TriCore (No Fast-Weight)] Step 400/600 | Val Loss: 3.4432 | Recall Acc: 3.1%
+[TriCore (No Fast-Weight)] Step 450/600 | Val Loss: 3.4305 | Recall Acc: 3.6%
+[TriCore (No Fast-Weight)] Step 500/600 | Val Loss: 3.4336 | Recall Acc: 3.8%
+[TriCore (No Fast-Weight)] Step 550/600 | Val Loss: 3.4404 | Recall Acc: 2.3%
+[TriCore (No Fast-Weight)] Step 600/600 | Val Loss: 3.4330 | Recall Acc: 3.3%
+[TriCore (No Adaptive Loop)] Step 001/600 | Val Loss: 3.9836 | Recall Acc: 2.0%
+[TriCore (No Adaptive Loop)] Step 050/600 | Val Loss: 3.4038 | Recall Acc: 5.8%
+[TriCore (No Adaptive Loop)] Step 100/600 | Val Loss: 0.0289 | Recall Acc: 99.8%
+[TriCore (No Adaptive Loop)] Step 150/600 | Val Loss: 0.0048 | Recall Acc: 100.0%
+[TriCore (No Adaptive Loop)] Step 200/600 | Val Loss: 0.0027 | Recall Acc: 100.0%
+[TriCore (No Adaptive Loop)] Step 250/600 | Val Loss: 0.0022 | Recall Acc: 100.0%
+[TriCore (No Adaptive Loop)] Step 300/600 | Val Loss: 0.0018 | Recall Acc: 100.0%
+[TriCore (No Adaptive Loop)] Step 350/600 | Val Loss: 0.0016 | Recall Acc: 100.0%
+[TriCore (No Adaptive Loop)] Step 400/600 | Val Loss: 0.0015 | Recall Acc: 100.0%
+[TriCore (No Adaptive Loop)] Step 450/600 | Val Loss: 0.0013 | Recall Acc: 100.0%
+[TriCore (No Adaptive Loop)] Step 500/600 | Val Loss: 0.0013 | Recall Acc: 100.0%
+[TriCore (No Adaptive Loop)] Step 550/600 | Val Loss: 0.0013 | Recall Acc: 100.0%
+[TriCore (No Adaptive Loop)] Step 600/600 | Val Loss: 0.0012 | Recall Acc: 100.0%
+[Vanilla Transformer] Step 001/600 | Val Loss: 4.0903 | Recall Acc: 2.3%
+[Vanilla Transformer] Step 050/600 | Val Loss: 3.4418 | Recall Acc: 3.0%
+[Vanilla Transformer] Step 100/600 | Val Loss: 3.3658 | Recall Acc: 9.5%
+[Vanilla Transformer] Step 150/600 | Val Loss: 3.2110 | Recall Acc: 12.5%
+[Vanilla Transformer] Step 200/600 | Val Loss: 3.1934 | Recall Acc: 10.3%
+[Vanilla Transformer] Step 250/600 | Val Loss: 3.0773 | Recall Acc: 13.4%
+[Vanilla Transformer] Step 300/600 | Val Loss: 3.0550 | Recall Acc: 12.0%
+[Vanilla Transformer] Step 350/600 | Val Loss: 2.9716 | Recall Acc: 13.0%
+[Vanilla Transformer] Step 400/600 | Val Loss: 2.8704 | Recall Acc: 12.0%
+[Vanilla Transformer] Step 450/600 | Val Loss: 2.9051 | Recall Acc: 10.6%
+[Vanilla Transformer] Step 500/600 | Val Loss: 2.8409 | Recall Acc: 12.8%
+[Vanilla Transformer] Step 550/600 | Val Loss: 2.8168 | Recall Acc: 14.4%
+[Vanilla Transformer] Step 600/600 | Val Loss: 2.8272 | Recall Acc: 13.1%
+
+Saved benchmark chart to results/tricore_vs_transformer.png
+Saved detailed report to results/BENCHMARK_REPORT.md

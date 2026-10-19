@@ -1,0 +1,1 @@
+﻿[PASS] Sanity check succeeded on cuda. Loss: 4.1582, Checked 50 parameter tensors.
