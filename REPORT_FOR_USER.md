@@ -1,8 +1,8 @@
-# TriCore V5 完成报告
+# TriCore V6 完成报告
 
 **日期：** 2026-10-20  
-**版本：** `tricore-arch` 0.5.0  
-**状态：** V5 双赛道实验完成；TorchScript-JIT 融合扫描已接入；MIT 开源套件就绪  
+**版本：** `tricore-arch` 0.6.0  
+**状态：** V6 双赛道实验完成；向量化多跳扫描与因果字节码解引用已接入；MIT 开源套件就绪  
 **实测报告：** `results/BENCHMARK_REPORT.md`  
 **图表：** `results/tricore_vs_transformer.png`  
 **运行设备：** CUDA
@@ -11,28 +11,30 @@
 
 ## 0. 一页结论
 
-V5 在不改变 V4 数学公式、参数量和 O(1) 状态结构的前提下，完成了三件事：
+V6 在不改变 V4/V5 数学公式、参数量和 O(1) 状态结构的前提下，完成了三件事：
 
-1. **运行时：** 将逐 token 的 Python 循环替换为 `@torch.jit.script tricore_fused_scan`。Full 训练 500 步从 V4 的 **136.0 s** 降到 **125.3 s**，加速 **1.08×**（不含 0.5 s 首次编译/预热）。
-2. **第二赛道：** 新增 Contextual Code LM（变量 / 别名 / 字面量 / 返回解引用），TriCore 1 层验证 **PPL 1.81、解引用准确率 21.09%**；2 层 Transformer 为 **PPL 1.96、18.75%**。6 类随机基线为 **16.67%**。
-3. **开源交付：** 根目录已有 `LICENSE`（MIT）、`.gitignore`、`pyproject.toml`；README 与 SPEC 已同步为 V5 实测数据；实验报告和 2×2 图表已重新生成。
+1. **运行时：** 把 O(1) 状态演化保留在 JIT 循环中，把 Engine III 的多跳重查询改为 `F_seq: [B, L, H, d_head, d_head]` 上的批量 5-D `matmul`。Python 只循环固定的 `max_loops`，不再逐 token 循环。Full 训练 500 步的 V6 / V5 / V4 墙钟对比见 §1。
+2. **第二赛道：** 把 V5 的 `EQ` 语句改为因果字节码 `[LET, alias, var, SEMI]`、`[ALIAS, var, lit, SEMI]`、`[NOP, var, SEMI, SEMI]`、`[RET, alias, lit, SEMI]`，并把解引用目标移到 `pos + 1` 的返回别名位置，强制 `alias_i -> var_i -> lit_i` 两级指针解析。PPL 与解引用准确率见 §3。
+3. **开源交付：** 根目录已有 `LICENSE`（MIT）、`.gitignore`、`pyproject.toml`；README 与 SPEC 已同步为 V6 实测数据；实验报告和 2×2 图表已重新生成。
 
-**必须同时看到的限制：** 两个赛道都是单 seed 合成任务。Track 1 的 Full 达到 100%/100%，但 No-Engine-I 本次为 91.88%/84.14%，没有复现 V4 的 63.44%/51.41%；这是单 seed 优化/评测批次差异，不是公式变化。Track 2 的 21.09% 只比随机高 4.42 个百分点，不能解读为“理解了代码”或“通用语言建模已被证明”。
+**必须同时看到的限制：** 两个赛道都是单 seed 合成任务。Track 1 的 Full 达到 100%/100%，但 No-Engine-I 本次为 **5.55%/4.14%**，跌到随机水平，和 V5 的 91.88%/84.14% 不同；公式没变，向量化多跳路径改变了单 seed 优化轨迹，不能把任一结果当作 Engine I 的普适结论。Track 2 的 **100.00%** 是在封闭、确定性的合成字节码语法上取得的，没有 held-out 模板，不能解读为“理解了真实代码”或“通用语言建模已被证明”。
 
 ---
 
-## 1. JIT 加速前后：训练耗时对比
+## 1. V6 向量化多跳：训练耗时对比
 
 | 测量项 | 耗时 | 说明 |
 | :--- | :---: | :--- |
 | V4 Full，Python 逐 token 循环 | 136.0 s | 历史参考运行 |
-| V5 Full，TorchScript 融合扫描 | **125.3 s** | 计时 500 步 |
-| V5 / V4 速度比 | **1.08×** | >1 表示更快，<1 表示更慢 |
-| V5 首次调用预热 | 0.5 s | 不计入正式计时 |
+| V5 Full，TorchScript 融合扫描 | 125.3 s | 历史参考运行 |
+| V6 Full，向量化多跳扫描 | **80.0 s** | 计时 500 步 |
+| V6 / V4 速度比 | **1.70×** | >1 表示更快，<1 表示更慢 |
+| V6 / V5 速度比 | **1.57×** | >1 表示更快，<1 表示更慢 |
+| V6 首次调用预热 | 0.4 s | 不计入正式计时 |
 
-计时范围包括数据生成、前向、反向和优化器步。V4 的 136.0 s 是此前记录的 Python 循环 Full 运行，不是同机同时测量；因此 1.08× 是单机单 seed 的墙钟对比，不是吞吐保证。
+计时范围包括数据生成、前向、反向和优化器步。V4 的 136.0 s 和 V5 的 125.3 s 是历史参考运行，不是同机同时测量；V6 的 80.0 s 是本次单机单 seed 墙钟结果，1.70× / 1.57× 是相对历史参考的比率，不是吞吐保证。
 
-**结论：** JIT 确实减少了 Python 逐 token 调度开销，但提升是温和的。它仍然是 PyTorch 张量算子的编译循环，不是自定义 CUDA kernel；小矩阵乘法和 kernel launch 仍是主要成本。相较 2 层 Transformer（15.9 s），TriCore 仍慢得多，因为 TriCore 是顺序递归。
+**结论：** V6 消除了 Engine III 的逐 token Python 循环，把每次固定跳的重查询变成一次跨 `L` 的批量 5-D `matmul`，因此 Full 从 V5 的 125.3 s 降到 80.0 s（1.57×），相对 V4 为 1.70×。但状态递归仍然串行，V6 不是并行前缀扫描，也不是自定义 CUDA kernel；小矩阵乘法和 kernel launch 仍是主要成本。相较 2 层 Transformer（18.6 s），TriCore 仍慢得多。
 
 ---
 
@@ -42,50 +44,50 @@ V5 在不改变 V4 数学公式、参数量和 O(1) 状态结构的前提下，�
 
 | 架构变体 | 参数量 | 最终验证 loss | 域内 2-hop 召回 | 4× 噪声间隔外推 | 训练耗时 |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **TriCore Full（三引擎全开）** | 207,503 | **0.0010** | **100.00%** | **100.00%** | 125.3 s |
-| TriCore No Engine I：去掉惊奇门控 | 207,503 | 0.4066 | 91.88% | 84.14% | 97.9 s |
-| TriCore No Engine II：去掉快权重 | 207,503 | 3.0008 | 5.78% | 4.14% | 29.2 s |
-| TriCore No Engine III：去掉自适应循环 | 207,503 | 1.8660 | 16.48% | 16.56% | 59.7 s |
-| Vanilla Transformer（2 层） | 543,744 | 2.3131 | 16.72% | 15.23% | 15.9 s |
+| **TriCore Full（三引擎全开）** | 207,503 | **0.0010** | **100.00%** | **100.00%** | 80.0 s |
+| TriCore No Engine I：去掉惊奇门控 | 207,503 | 3.0005 | 5.55% | 4.14% | 62.3 s |
+| TriCore No Engine II：去掉快权重 | 207,503 | 3.0008 | 5.78% | 3.98% | 36.1 s |
+| TriCore No Engine III：去掉自适应循环 | 207,503 | 1.8660 | 16.48% | 17.50% | 63.4 s |
+| Vanilla Transformer（2 层） | 543,744 | 2.3131 | 16.72% | 14.92% | 18.6 s |
 
 ### Track 1 解读
 
 1. **Full 解决任务。** 域内 100.00%，4× 间隔仍 100.00%，验证 loss 0.0010。
-2. **Engine II 是联想记忆本体。** 去掉快权重后 5.78%/4.14%，低于 6 选 1 的 16.67% 随机水平。
-3. **Engine III 是第二跳。** 去掉隐空间重查询后 16.48%/16.56%，基本等于随机；第一跳还能取到桥接 token，但无法把它转成最终值。
-4. **Engine I 本次仍有贡献，但不是“缺了就崩”。** 去掉写保护后 91.88%/84.14%，相对 Full 下降 8.12/15.86 个百分点。V4 记录的 63.44%/51.41% 没有复现；相同公式下单 seed 优化轨迹和固定评测批次会带来差异，不能把两次数字当成同一实验的直接复现。
-5. **Transformer 在本预算下是随机水平。** 16.72%/15.23%；它未调参、未做参数/算力匹配，因此这不是“注意力上限”的证据。
-6. **JIT 只解决 Python 开销。** Full 125.3 s 对 V4 136.0 s，1.08×；Transformer 仍快得多。
+2. **Engine II 是联想记忆本体。** 去掉快权重后 5.78%/3.98%，低于 6 选 1 的 16.67% 随机水平。
+3. **Engine III 是第二跳。** 去掉隐空间重查询后 16.48%/17.50%，基本等于随机；第一跳还能取到桥接 token，但无法把它转成最终值。
+4. **Engine I 在本次 V6 运行中是必要的。** 去掉写保护后 5.55%/4.14%，直接跌到随机；这与 V5 的 91.88%/84.14% 不同。公式没变，但向量化多跳路径改变了单 seed 优化轨迹，因此不能把任一结果当作普适结论。
+5. **Transformer 在本预算下是随机水平。** 16.72%/14.92%；它未调参、未做参数/算力匹配，因此这不是“注意力上限”的证据。
+6. **向量化多跳带来实质加速。** Full 80.0 s，对 V4 136.0 s 为 1.70×，对 V5 125.3 s 为 1.57×；Transformer 仍快得多（18.6 s）。
 
 ---
 
-## 3. Track 2：Contextual Code LM（语言建模 + 解引用）
+## 3. Track 2：Causal Bytecode LM（语言建模 + 解引用）
 
-**协议：** 300 步，batch 32，`lr=3e-3`，seed 42；6 个变量、6 条 NOP、序列长度 82；固定评测批次 seed 3030；dense next-token 交叉熵；解引用准确率只在 `[RET, alias_i, lit_i, SEMI]` 的 alias 位置计算。
+**协议：** 450 步，batch 64，`lr=3e-3`，seed 42；6 个变量、4 条 NOP、序列长度 80；固定评测批次 seed 3030；训练目标为 `0.25 * dense_loss + deref_loss`；评测报告 dense 交叉熵/PPL 与解引用准确率，解引用只在 `[RET, alias_i, lit_i, SEMI]` 的 alias 位置（`pos + 1`）计算。
 
 | 模型 | 参数量 | 验证 loss | 验证 PPL | 解引用准确率 | 训练耗时 |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **TriCore Full（1 层）** | 207,503 | 0.5914 | **1.81** | **21.09%** | 83.4 s |
-| Vanilla Transformer（2 层） | 543,744 | 0.6753 | 1.96 | 18.75% | 2.9 s |
+| **TriCore Full（1 层）** | 207,503 | 1.1529 | **3.17** | **100.00%** | 78.5 s |
+| Vanilla Transformer（2 层） | 543,744 | 1.2686 | 3.56 | 19.63% | 19.5 s |
 
 **任务格式（语句随机排序）：**
 
 ```text
-[LET,   var_i,   EQ, lit_i,  SEMI]
-[ALIAS, alias_i, EQ, var_i,  SEMI]
-[NOP,   NOISE,   SEMI]  × 6
+[LET,   alias_i, var_i, SEMI]   # alias_i -> var_i
+[ALIAS, var_i,   lit_i, SEMI]   # var_i   -> lit_i
+[NOP,   var_i,   SEMI,  SEMI]  × 4
 ...
-[RET,   alias_i, lit_i,  SEMI]
+[RET,   alias_i, lit_i, SEMI]   # predict lit_i at the alias position
 ```
 
-变量、别名、字面量三个命名空间互不重叠。返回使用别名，所以模型必须在 alias 位置预测 `lit_i`，即完成 `alias_i -> var_i -> lit_i` 的两级解引用，而不是复制表面 token。6 个等概率字面量，随机基线 **16.67%**。
+V6 修正了 V5 的关键缺陷：V5 在 `[LET, var_i, EQ, lit_i]` 中把答案 `lit_i` 直接放在变量后面，且 `EQ` 参与哈希，导致 alias 与 variable 可能碰撞；V6 的因果字节码把 `LET` 绑定到 `alias -> var`，把 `ALIAS` 绑定到 `var -> lit`，返回时输入只有 `alias_i`，目标 `lit_i` 位于 `pos + 1`。模型必须完成 `alias_i -> var_i -> lit_i` 的两级指针解引用，而不能复制表面 token。6 个等概率字面量，随机基线 **16.67%**。
 
 ### Track 2 解读
 
-- TriCore 的 PPL 更低（1.81 对 1.96），解引用准确率高 2.34 个百分点（21.09% 对 18.75%）。
-- 但 21.09% 只比随机高 **4.42 个百分点**，Transformer 也只高 2.08 个百分点；两者都远未解决该任务。
-- 因此正确结论是：**管线跑通，TriCore 出现非退化信号并有小幅优势；不足以宣称通用代码理解、组合泛化或全面优于 Transformer。**
-- 任务本身是合成语法，不是人类代码；300 步、6 变量、单 seed 的预算也很小。
+- TriCore 的 PPL 更低（3.17 对 3.56），解引用准确率为 **100.00%**，Transformer 为 **19.63%**；6 类随机基线是 16.67%。
+- 100.00% 说明模型在这个封闭语法上学会了 `alias_i -> var_i -> lit_i` 的两级指针查找；Transformer 仍接近随机。
+- 因此正确结论是：**因果字节码管线跑通，目标能力可学习；但这不等于真实代码理解、组合泛化或全面优于 Transformer。**
+- 任务本身是确定性的合成字节码，没有 held-out 模板；450 步、6 变量、单 seed 的预算也很小。
 
 ---
 
@@ -111,17 +113,17 @@ TriCore 单核状态为 `h`（128 floats）+ `F_mat`（4,096 floats）+ `prev_k`
 | :--- | :---: | :--- |
 | `LICENSE` | ✅ 已创建 | MIT License |
 | `.gitignore` | ✅ 已创建 | Python 缓存、虚拟环境、编辑器文件；保留 `results/` 报告与 PNG |
-| `pyproject.toml` | ✅ 已创建 | `tricore-arch` 0.5.0，Python ≥3.10，torch/numpy/matplotlib，MIT |
-| `README.md` | ✅ 已更新 | V5 标题、JIT、双赛道实测表、限制、复现命令、12 条不变量 |
-| `SPEC_V2.md` | ✅ 已更新 | V5 JIT 合约、公式、状态核算、任务令牌布局、协议、实测记录 |
+| `pyproject.toml` | ✅ 已创建 | `tricore-arch` 0.6.0，Python ≥3.10，torch/numpy/matplotlib，MIT |
+| `README.md` | ✅ 已更新 | V6 标题、向量化多跳、因果字节码、双赛道实测表、限制、复现命令、不变量 |
+| `SPEC_V2.md` | ✅ 已更新 | V6 JIT 四元组合约、向量化 Engine III、状态核算、任务令牌布局、协议、实测记录 |
 | `requirements.txt` | ✅ 已存在 | `torch>=2.0`、`numpy>=1.24`、`matplotlib>=3.7` |
 | `tricore/__init__.py` | ✅ 已更新 | 导出 `TriCoreBlock`、`TriCoreLM`、`BaselineTransformerLM` 与两个任务生成器 |
 | `tricore/model.py` | ✅ 已更新 | `tricore_fused_scan`、双模型 |
-| `tricore/tasks.py` | ✅ 已更新 | 2-Hop MQAR + Contextual Code LM |
+| `tricore/tasks.py` | ✅ 已更新 | 2-Hop MQAR + 因果字节码 Contextual Code LM |
 | `tests/test_sanity.py` | ✅ 已存在 | 前向/反向/形状/梯度流 |
-| `tests/test_v5.py` | ✅ 已创建 | JIT 对 Python 参考的五组 flag 等价性 + Code LM 形状/反向 |
-| `run_experiment.py` | ✅ 已更新 | 双赛道、五组消融、grad clipping、报告与 2×2 图 |
-| `results/BENCHMARK_REPORT.md` | ✅ 已生成 | 本次 V5 实测报告 |
+| `tests/test_v5.py` | ✅ 已创建 | JIT 四元组对 Python 参考的四组 scan flag 等价性 + 因果字节码形状/反向 |
+| `run_experiment.py` | ✅ 已更新 | 双赛道、Track 1 五组消融、grad clipping、报告与 2×2 图 |
+| `results/BENCHMARK_REPORT.md` | ✅ 已生成 | 本次 V6 实测报告 |
 | `results/tricore_vs_transformer.png` | ✅ 已生成 | 2×2 对比图 |
 | `REPORT_FOR_USER.md` | ✅ 本文件 | 完整交付说明 |
 
@@ -154,23 +156,23 @@ python tests/test_v5.py
 
 **关键文件：**
 
-- `tricore/model.py`：`@torch.jit.script tricore_fused_scan`、`TriCoreBlock`、`TriCoreLM`、`BaselineTransformerLM`
-- `tricore/tasks.py`：`generate_associative_recall_batch`、`generate_contextual_code_lm_batch`
-- `run_experiment.py`：Track 1 五组消融、Track 2 两模型、JIT 计时、cache 核算、Markdown 报告、matplotlib 2×2 图
-- `tests/test_v5.py`：JIT 与 Python 参考在 Full / No-I / No-II / No-III / all-off 五组配置下的 `allclose` 等价性；Code LM 的形状、mask、反向梯度检查
+- `tricore/model.py`：`@torch.jit.script tricore_fused_scan`（四元组返回）、向量化 5-D 多跳 `TriCoreBlock`、`TriCoreLM`、`BaselineTransformerLM`
+- `tricore/tasks.py`：2-Hop MQAR 与因果字节码 `generate_contextual_code_lm_batch`
+- `run_experiment.py`：Track 1 五组消融、Track 2 两模型、V6 计时、cache 核算、Markdown 报告、matplotlib 2×2 图
+- `tests/test_v5.py`：JIT 与 Python 参考在四种 `enable_surprise_gate` × `enable_fast_weight` 组合下对 `h_seq`、`r1_seq`、`F_seq`、`surprise_trace` 的 `allclose` 等价性；`TriCoreLM` 前向/反向；因果字节码的形状、`pos + 1` mask、反向梯度检查
 
 ---
 
-## 7. 结论：V5 到底证明了什么
+## 7. 结论：V6 到底证明了什么
 
 ### 已证明（在所述合成任务与预算内）
 
 1. **Full TriCore 能完成 2-Hop 链式联想召回**，并在 4× 对抗噪声间隔外推下保持 100.00%。
 2. **Engine II 和 Engine III 是该任务的关键**：去掉快权重或去掉隐空间重查询都会跌到随机水平附近。
-3. **Engine I 有贡献但不总是决定性**：本次去掉后仍有 91.88%/84.14%，与 V4 记录的 63.44%/51.41% 不同；这提醒我们单 seed 消融结论的脆弱性。
-4. **JIT 融合扫描保持公式等价并带来 1.08× 的 Full 训练加速**；它不是 kernel 级优化，不能期待数量级提升。
+3. **Engine I 在本次 V6 运行中是必要的**：去掉后跌到 5.55%/4.14%，与 V5 的 91.88%/84.14% 不同；这提醒我们单 seed 消融结论的脆弱性。
+4. **V6 把多跳重查询从逐 token 循环改成跨全部位置的一次批量 5-D `matmul`**，保持公式等价；状态递归仍是串行，不能把它描述成并行前缀扫描或 kernel 级优化。
 5. **O(1) 状态核算是真实的**：17.00 KiB 与序列长度无关，32K 时相对 2 层 KV cache 为 3,855.1×。
-6. **第二赛道管线可运行**：TriCore 在合成 Code LM 上 PPL 1.81、解引用 21.09%，略优于 2 层 Transformer 的 1.96 / 18.75%，但两者都接近 16.67% 随机水平。
+6. **第二赛道管线可运行**：TriCore 在因果字节码任务上 PPL 3.17、解引用 100.00%；2 层 Transformer 为 3.56 / 19.63%，接近 16.67% 随机水平。这证明封闭语法上的两级指针查找可学习，不证明真实代码理解。
 
 ### 未证明 / 不应宣称
 
@@ -178,8 +180,9 @@ python tests/test_v5.py
 - 对调参后 Transformer 的全面优势；Track 1 的 Transformer 未调参、未匹配参数/算力。
 - 多 seed 稳健性、统计显著性、置信区间。
 - 生产吞吐、长上下文实测解码、分布式/混合精度/量化能力。
-- “Engine I 在所有任务上都必要”或“三个引擎缺一不可”的普适结论；本次 No-I 没有崩，V3/V4 的任务依赖性也说明结论是条件性的。
-- JIT 已接近硬件最优；它仍是编译后的 PyTorch 循环。
+- 训练显存的 O(1) 性质：V6 会物化 `F_seq`，训练激活随 `L` 增长；只有持久推理状态是 O(1)。
+- “Engine I 在所有任务上都必要”或“三个引擎缺一不可”的普适结论；本次 V6 No-I 跌到随机，但 V5 没有，说明结论对优化轨迹和 seed 敏感。
+- JIT 已接近硬件最优；它仍是编译后的 PyTorch 循环，状态递归仍串行。
 
 ---
 
@@ -187,9 +190,9 @@ python tests/test_v5.py
 
 1. **多 seed**：至少 3 个 seed，报告 mean ± std，尤其是 No-Engine-I 的方差。
 2. **更强基线**：调参 Transformer，匹配非位置参数量、训练 token 与算力。
-3. **更长/更难 Code LM**：更多变量、更长训练、held-out 模板；当前 21.09% 不足以支撑能力结论。
+3. **更长/更难 Code LM**：更多变量、更长训练、held-out 模板；当前封闭语法上的 100.00% 不足以支撑真实代码能力结论。
 4. **3–5 hop**：验证 latent re-query 是否随跳数扩展，以及 router 是否学会使用额外循环。
-5. **真正 kernel**：在 JIT 基础上做 fused/chunked CUDA/Triton scan，目标是把 1.08× 提升到有意义的量级。
+5. **真正 kernel**：在 JIT + 向量化多跳的基础上做 fused/chunked CUDA/Triton scan；V6 已达到 1.57×（对 V5）/1.70×（对 V4），下一步是减少小 kernel launch 与串行状态更新成本。
 6. **长上下文实测**：用真实 KV cache 解码对比 32K–128K 的延迟与显存，而不只做公式核算。
 
 ---
@@ -198,21 +201,21 @@ python tests/test_v5.py
 
 | 项目 | 状态 |
 | :--- | :---: |
-| V5 模型代码（JIT scan + LM + baseline） | ✅ 完成 |
+| V6 模型代码（JIT 四元组 + 向量化多跳 + LM + baseline） | ✅ 完成 |
 | Track 1 五组消融 | ✅ 完成并写入报告 |
-| Track 2 Contextual Code LM | ✅ 完成并写入报告 |
-| JIT 前后耗时对比 | ✅ 125.3 s vs 136.0 s（1.08×） |
+| Track 2 因果字节码 Contextual Code LM | ✅ 完成并写入报告 |
+| V6 / V5 / V4 耗时对比 | ✅ 80.0 s vs 125.3 s vs 136.0 s（1.57× / 1.70×） |
 | 推理状态核算 | ✅ 17.00 KiB；32K 时 3,855.1× |
-| README / SPEC 同步 | ✅ 已更新为 V5 数据 |
+| README / SPEC 同步 | ✅ 已更新为 V6 数据 |
 | LICENSE / .gitignore / pyproject | ✅ 已创建 |
 | 测试文件 | ✅ `tests/test_v5.py` 已创建；命令见上 |
 | 结果报告与图 | ✅ 已生成 |
 | 本汇报文件 | ✅ 已生成 |
 
-> 一句话总结：**V5 把 TriCore 的递归循环编译进了 TorchScript，保持了 O(1) 状态和 2-Hop 能力，并补上了第二赛道与开源交付；但 Track 2 仍只是略高于随机，Track 1 的 Engine I 消融也显示单 seed 结论并不稳固。下一阶段的重点是多种子、强基线、更难代码任务和真正的 kernel。**
+> 一句话总结：**V6 把 Engine III 的多跳重查询向量化到全部时间步，Full 训练从 V5 的 125.3 s 降到 80.0 s（1.57×，对 V4 为 1.70×），并用因果字节码把 Track 2 的解引用目标移到返回别名 `pos + 1`，在该封闭语法上达到 100.00%；但状态递归仍串行，Track 2 不是真实代码，Track 1 的 Engine I 消融也再次显示单 seed 结论并不稳固。下一阶段的重点是多种子、强基线、held-out 模板和真正的 kernel。**
 
 ---
 
 <p align="center">
-  <i>TriCore V5 — constant state, surprise-gated writes, causal delta memory, and a compiled latent loop.</i>
+  <i>TriCore V6 — constant state, surprise-gated writes, causal delta memory, and a vectorized latent loop.</i>
 </p>

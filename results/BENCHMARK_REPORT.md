@@ -1,40 +1,42 @@
-# TriCore V5 Experimental Benchmark Report
+# TriCore V6 Experimental Benchmark Report
 
 - **Compute Device:** `CUDA`
-- **Operator:** TorchScript JIT-fused TriCore scan (mathematically equivalent to V4)
+- **Operator:** TorchScript JIT recurrent scan + vectorized parallel multi-hop Engine III
 - **Track 1:** 2-Hop Chained Associative Recall with adversarial distractor gap; 500 optimizer steps, batch 64, lr 3e-3, seed 42; 6 chains, 4 queries, 16 training noise tokens.
-- **Track 2:** Contextual Code LM; 300 optimizer steps, batch 32, lr 3e-3, seed 42; 6 variables, 6 NOP statements, sequence length 82.
+- **Track 2:** Causal-bytecode Contextual Code LM; 450 optimizer steps, batch 64, lr 3e-3, seed 42; 6 variables, 4 NOP statements, sequence length 80; joint loss `0.25 * dense_loss + deref_loss`.
 - **Open-source packaging:** `ready` (MIT LICENSE, .gitignore, pyproject.toml)
 
 ## 1. JIT Fusion and Track 1 Ablation
 
-### 1.1 JIT timing versus V4
+### 1.1 JIT timing versus V4 and V5
 
 | Measurement | Time | Note |
 | :--- | :---: | :--- |
 | V4 Full, Python per-token loop | 136.0 s | reference run |
-| V5 Full, TorchScript fused scan | 125.3 s | timed 500 steps |
-| V5 / V4 speed ratio | 1.08x | >1 means faster; <1 means slower |
-| V5 first-call warm-up | 0.5 s | excluded from timed training |
+| V5 Full, TorchScript fused scan | 125.3 s | reference run |
+| V6 Full, vectorized multi-hop scan | 80.0 s | timed 500 steps |
+| V6 / V4 speed ratio | 1.70x | >1 means faster; <1 means slower |
+| V6 / V5 speed ratio | 1.57x | >1 means faster; <1 means slower |
+| V6 first-call warm-up | 0.4 s | excluded from timed training |
 
-The comparison uses the previously recorded V4 Full time of 136.0 s. The warm-up call is excluded from the timed V5 run; timed training includes data generation, forward, backward, and optimizer steps.
+The comparison uses the previously recorded V4 Full time of 136.0 s and V5 Full time of 125.3 s. The warm-up call is excluded from the timed V6 run; timed training includes data generation, forward, backward, and optimizer steps.
 
 ### 1.2 Five-way ablation
 
 | Architecture Variant | Parameters | Final Val Loss | In-Domain 2-Hop Recall (%) | 4x Noise-Gap Extrapolation (%) | Train Time (s) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| TriCore Full (3-in-1) | 207,503 | 0.0010 | **100.00%** | **100.00%** | 125.3 |
-| TriCore (No Engine I: Surprise Gate) | 207,503 | 0.4066 | **91.88%** | **84.14%** | 97.9 |
-| TriCore (No Engine II: Fast-Weight) | 207,503 | 3.0008 | **5.78%** | **4.14%** | 29.2 |
-| TriCore (No Engine III: Adaptive Loop) | 207,503 | 1.8660 | **16.48%** | **16.56%** | 59.7 |
-| Vanilla Transformer (2-Layer) | 543,744 | 2.3131 | **16.72%** | **15.23%** | 15.9 |
+| TriCore Full (3-in-1) | 207,503 | 0.0010 | **100.00%** | **100.00%** | 80.0 |
+| TriCore (No Engine I: Surprise Gate) | 207,503 | 3.0005 | **5.55%** | **4.14%** | 62.3 |
+| TriCore (No Engine II: Fast-Weight) | 207,503 | 3.0008 | **5.78%** | **3.98%** | 36.1 |
+| TriCore (No Engine III: Adaptive Loop) | 207,503 | 1.8660 | **16.48%** | **17.50%** | 63.4 |
+| Vanilla Transformer (2-Layer) | 543,744 | 2.3131 | **16.72%** | **14.92%** | 18.6 |
 
 ## 2. Track 2: Contextual Code Language Modeling
 
 | Model | Parameters | Validation Loss | Validation PPL | Dereference Acc (%) | Train Time (s) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| TriCore Full (1-Layer) | 207,503 | 0.5914 | 1.81 | **21.09%** | 83.4 |
-| Vanilla Transformer (2-Layer) | 543,744 | 0.6753 | 1.96 | **18.75%** | 2.9 |
+| TriCore Full (1-Layer) | 207,503 | 1.1529 | 3.17 | **100.00%** | 78.5 |
+| Vanilla Transformer (2-Layer) | 543,744 | 1.2686 | 3.56 | **19.63%** | 19.5 |
 
 > Track 2 chance-level dereference accuracy is **16.67%** (6 equally likely literals). The metric is measured at the return alias position. The task is dense next-token prediction over a synthetic imperative grammar; it is not human code.
 

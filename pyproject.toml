@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tricore-arch"
-version = "0.5.0"
-description = "Attention-free constant-state sequence operator with JIT-fused multi-hop synaptic memory"
+version = "0.6.0"
+description = "Attention-free constant-state sequence operator with vectorized multi-hop synaptic memory and a causal bytecode task"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }

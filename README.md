@@ -1,20 +1,20 @@
-# TriCore V5
+# TriCore V6
 
-**A JIT-fused, attention-free sequence operator with a 17 KiB constant-size inference state, latent multi-hop synaptic chaining, and a dual-track evidence package.**
+**A JIT-recurrent, attention-free sequence operator with a 17 KiB constant-size inference state, vectorized multi-hop synaptic chaining, and a causal bytecode pointer task.**
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![TorchScript](https://img.shields.io/badge/TorchScript-JIT%20fused-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/docs/stable/jit.html)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-sanity%20%2B%20JIT%20equivalence-brightgreen)](#8-verification)
+[![Tests](https://img.shields.io/badge/tests-sanity%20%2B%20V6%20equivalence-brightgreen)](#8-verification)
 
-> **Status:** experimental research reference, not a production language model. V5 keeps the V4 equations and adds a TorchScript-JIT recurrent kernel plus a second synthetic track. All reported numbers are single-seed runs. Read [Limitations](#9-limitations) before generalizing.
+> **Status:** experimental research reference, not a production language model. V6 keeps the V4/V5 equations, separates the O(1) recurrent state from a fully vectorized multi-hop pass, and fixes Track 2 to a causal bytecode format with the dereference target at `pos + 1`. All reported numbers are single-seed runs. Read [Limitations](#9-limitations) before generalizing.
 
-> **TL;DR (Track 1, 2-Hop MQAR).** Full TriCore reaches **100.00% in-domain recall** and **100.00% recall under a 4x longer adversarial distractor gap** with a **17.00 KiB O(1) state**. Removing Engine I gives **91.88% / 84.14%**; removing Engine II gives **5.78% / 4.14%**; removing Engine III gives **16.48% / 16.56%**. A 2-layer Transformer reaches **16.72% / 15.23%**, which is chance at this budget. The JIT-fused Full run takes **125.3 s** for 500 steps versus **136.0 s** for the V4 Python loop (**1.08x** faster), excluding a 0.5 s warm-up.
+> **TL;DR (Track 1, 2-Hop MQAR).** Full TriCore reaches **100.00% in-domain recall** and **100.00% recall under a 4x longer adversarial distractor gap** with a **17.00 KiB O(1) state**. Removing Engine I gives **5.55% / 4.14%**; removing Engine II gives **5.78% / 3.98%**; removing Engine III gives **16.48% / 17.50%**. A 2-layer Transformer reaches **16.72% / 14.92%**, which is chance at this budget. The V6 Full run takes **80.0 s** for 500 steps versus **136.0 s** for V4 (**1.70x** faster) and **125.3 s** for V5 (**1.57x** faster), excluding a 0.4 s warm-up.
 
-> **TL;DR (Track 2, Contextual Code LM).** TriCore (1 layer) reaches validation **PPL 1.81** and **21.09% dereference accuracy**; the 2-layer Transformer reaches **PPL 1.96** and **18.75%**. The 6-way chance level is **16.67%**. This is a small edge on a synthetic grammar, not evidence of general code understanding.
+> **TL;DR (Track 2, Causal Bytecode LM).** TriCore (1 layer) reaches validation **PPL 3.17** and **100.00% dereference accuracy** on the synthetic `alias -> var -> lit` return task; the 2-layer Transformer reaches **PPL 3.56** and **19.63%**. The 6-way chance level is **16.67%**. The near-perfect score is on a closed synthetic bytecode grammar, not evidence of general code understanding.
 
-> **中文速览.** TriCore V5 保持 V4 的全部数学公式，把逐 token 的 Python 循环替换为 `@torch.jit.script` 融合扫描，并新增“上下文代码语言建模”第二赛道。Track 1 中 Full 达到 **100.00% 域内召回 / 100.00% 四倍噪声间隔外推**，单核推理状态恒为 **17.00 KB**；去掉 Engine I 为 91.88%/84.14%，去掉 Engine II 为 5.78%/4.14%，去掉 Engine III 为 16.48%/16.56%，2 层 Transformer 为 16.72%/15.23%。Full 训练 **125.3 s**，对比 V4 Python 循环 **136.0 s**，JIT 加速 **1.08×**。Track 2 中 TriCore 验证 PPL **1.81**、解引用准确率 **21.09%**；Transformer 为 **1.96 / 18.75%**，6 类随机基线为 16.67%。结论仅限单 seed 合成任务，不代表自然语言或真实代码能力。
+> **中文速览.** TriCore V6 保持 V4/V5 的全部数学公式，把 O(1) 状态演化保留在 `@torch.jit.script` 循环中，并把多跳重查询改为跨全部时间步的批量 5-D `matmul`；第二赛道改为因果字节码，解引用目标位于返回别名的 `pos + 1`。Track 1 中 Full 达到 **100.00% 域内召回 / 100.00% 四倍噪声间隔外推**，单核推理状态恒为 **17.00 KB**；去掉 Engine I 为 5.55%/4.14%，去掉 Engine II 为 5.78%/3.98%，去掉 Engine III 为 16.48%/17.50%，2 层 Transformer 为 16.72%/14.92%。Full 训练 **80.0 s**，对比 V4 Python 循环 **136.0 s** 加速 **1.70×**，对比 V5 **125.3 s** 加速 **1.57×**。Track 2 中 TriCore 验证 PPL **3.17**、解引用准确率 **100.00%**；Transformer 为 **3.56 / 19.63%**，6 类随机基线为 16.67%。结论仅限单 seed 合成任务，不代表自然语言或真实代码能力。
 
 ---
 
@@ -22,7 +22,7 @@
 
 - [1. The problem](#1-the-problem)
 - [2. Architecture](#2-architecture)
-- [3. What changed in V5](#3-what-changed-in-v5)
+- [3. What changed in V6](#3-what-changed-in-v6)
 - [4. Quick start](#4-quick-start)
 - [5. Benchmark](#5-benchmark)
 - [6. Repository layout](#6-repository-layout)
@@ -46,22 +46,22 @@ Associative recall adds a third requirement. A single fast-weight lookup can lea
 
 > **Can one constant-state core perform multiple associative reads by looping the retrieved latent back through the same fast weights?**
 
-V5 also asks a practical question that V4 could not answer:
+V6 asks two practical questions that V5 could not answer:
 
-> **Does replacing the Python per-token recurrence with a TorchScript-JIT scan remove enough host overhead to make the operator competitive in wall-clock training?**
+> **Can the multi-hop refinement be vectorized across all timesteps instead of re-running a serial per-token loop? And can Track 2 force a causal pointer dereference instead of leaking the answer through a surface token?**
 
-The answers are deliberately narrow. On a controlled 2-hop task, a causal shifted delta-rule memory plus a latent re-query loop solves the task with an O(1) inference state. The JIT scan is **1.08x** faster than the V4 Python loop on the reference machine, but it is still a compiled loop of tensor operations, not a custom CUDA kernel, and it remains much slower than a 2-layer Transformer on these short sequences. The second track is a synthetic code-like grammar, not human code.
+The answers are deliberately narrow. On a controlled 2-hop task, a causal shifted delta-rule memory plus a latent re-query loop solves the task with an O(1) inference state. V6 removes the per-token hop loop by batching the refinement over all positions, but the state recurrence is still serial, the implementation is still a compiled graph of tensor operations rather than a custom CUDA kernel, and it remains much slower than a 2-layer Transformer on these short sequences. The second track is a synthetic bytecode grammar, not human code.
 
 ### Design goals
 
-| Goal | V5 mechanism | Evidence |
+| Goal | V6 mechanism | Evidence |
 | :--- | :--- | :--- |
 | No attention over positions | Only the hop router uses softmax, over `max_loops + 1` slots | Five-way Track 1 table |
 | O(1) inference state | `h`, `F_mat`, `prev_k` | 17.00 KiB per sample; 3,855.1x smaller than a 2-layer KV cache at 32K |
-| Multi-hop with one core | Latent re-query of the same fast weights | Full 100% versus 16.48% without Engine III |
-| Selective writes | Learned surprise-gated write protection | Full 100% versus 91.88% without Engine I at this seed |
-| Faster recurrence | TorchScript-JIT fused scan | 125.3 s versus 136.0 s (V4) |
-| Second task | Contextual Code LM with alias dereference | PPL 1.81, deref 21.09% (chance 16.67%) |
+| Multi-hop with one core | Latent re-query of the same fast weights, vectorized over all positions | Full versus No-Engine-III ablation |
+| Selective writes | Learned surprise-gated write protection | Full versus No-Engine-I at this seed |
+| Faster multi-hop | JIT state loop + batched 5-D refinement | V6 `80.0 s` vs V5 `125.3 s` vs V4 `136.0 s` |
+| Second task | Causal bytecode LM with alias dereference at `pos + 1` | `PPL 3.17`; `100.00%` dereference vs `16.67%` chance |
 | Open-source packaging | MIT license, `pyproject.toml`, `.gitignore`, tests | [Repository layout](#6-repository-layout) |
 
 ---
@@ -166,46 +166,48 @@ y_t = x_t + \operatorname{LN}(z_t)
 
 When `enable_adaptive_loop=False`, `r_t^out = r_t^(0)` and the refinement MLP is skipped. When `enable_fast_weight=False`, Engine II is skipped, `z=h_seq`, and Engine III has no memory to read. All modules are constructed regardless of flags, so all TriCore variants report the same parameter count.
 
-### 2.6 TorchScript-JIT fused scan
+### 2.6 JIT-recurrent state and vectorized multi-hop pass
 
-V5 moves the entire recurrent scan into one scripted function:
+V6 splits the operator into two regions. The causal O(1) state evolution stays in a scripted loop because it is genuinely sequential. The multi-hop equilibrium pass is vectorized across every timestep:
 
 ```python
 @torch.jit.script
 def tricore_fused_scan(
-    u_feat, u_surp_bias, w_gate_logits, hop_weights, Q, K, V,
-    base_decay, fast_decay, fast_lr, hop_proj,
-    enable_surprise_gate, enable_fast_weight, enable_adaptive_loop, max_loops,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    u_feat, u_surp_bias, w_gate_logits, Q, K, V,
+    base_decay, fast_decay, fast_lr,
+    enable_surprise_gate, enable_fast_weight,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     ...
 ```
 
-The function owns the exact state `h [B,D]`, `F_mat [B,H,d_head,d_head]`, and `prev_k [B,H,d_head,1]`; it never materializes a `[B,L,...]` fast-weight cache. The per-token loop is compiled once, removes Python dispatch from the hot path, and returns:
+The recurrent state itself is `h [B,D]`, `F_mat [B,H,d_head,d_head]`, and `prev_k [B,H,d_head,1]`. To vectorize the refinement, the scripted scan also returns per-position `F` snapshots as a training-time `F_seq [B,L,H,d_head,d_head]` tensor. That tensor is not a persistent inference cache: the deployed inference state remains O(1) in `L`, and no KV-style cache is carried across decoding steps. The scripted loop is compiled once and returns:
 
 - `h_seq: [B, L, D]`
-- `mem_seq: [B, L, H*d_head]` (zeros when `enable_fast_weight=False`)
+- `r1_seq: [B, L, H, d_head, 1]` — hop-1 reads (zeros when `enable_fast_weight=False`)
+- `F_seq: [B, L, H, d_head, d_head]` — per-position fast-weight snapshots
 - `surprise_trace: [B, L]`
 
-`TriCoreBlock` precomputes projections and calls the scan with keyword arguments. The JIT path is mathematically equivalent to the V4 Python loop. `tests/test_v5.py` compares the scripted function against an explicit Python reference for all-engines, each single-engine ablation, and all-disabled, asserting `allclose` on all three outputs.
+`TriCoreBlock` then loops only over the fixed `max_loops` budget, not over tokens. Each refinement step normalizes the previous read, projects it into query space, and applies `torch.matmul(F_seq, q_next)` to all `L` positions at once. The Python-level loop count is therefore `max_loops`, while the work inside each hop is a batched 5-D matrix product.
 
-This is **not** a custom CUDA kernel. It is a compiled graph of PyTorch tensor operations, so it still pays kernel-launch and small-matrix costs. It is a runtime cleanup, not a hardware-optimal scan.
+The JIT path is mathematically equivalent to the V4/V5 Python reference. `tests/test_v5.py` compares the scripted function against an explicit Python reference for all-engines, each single-engine ablation, and all-disabled, asserting `allclose` on all four outputs.
+
+This is **not** a custom CUDA kernel and it is **not** a parallel prefix scan. The recurrent state update remains serial; only the multi-hop refinement is vectorized across sequence positions. It still pays kernel-launch and small-matrix costs, so the measured speedup is a runtime cleanup rather than a hardware-optimal scan.
 
 ---
 
-## 3. What changed in V5
+## 3. What changed in V6
 
-| Area | V4 | V5 |
+| Area | V5 | V6 |
 | :--- | :--- | :--- |
-| Recurrence | Python per-token loop in `forward` | Single `@torch.jit.script tricore_fused_scan` |
-| Public math | Reference equations | Identical equations and state shapes |
-| Tasks | 2-Hop MQAR only | 2-Hop MQAR + Contextual Code LM |
-| Evidence | One 500-step track | Two tracks with separate protocols |
-| Speed measurement | Not isolated | V4 136.0 s vs V5 125.3 s Full, 1.08x |
-| Tests | Shape/gradient sanity | Plus JIT-vs-Python equivalence and code-task backward |
-| Packaging | README/spec only | MIT `LICENSE`, `.gitignore`, `pyproject.toml` |
-| Report | Single-track report | `results/BENCHMARK_REPORT.md` with JIT, both tracks, cache |
+| Recurrence | One serial TorchScript loop for state evolution and every hop | JIT loop for the O(1) causal state, then a fully batched multi-hop pass over all `L` positions |
+| Engine III | Per-token re-query loop inside the scripted scan | `F_seq: [B, L, H, d_head, d_head]` snapshots re-queried with batched 5-D `matmul`; Python loops only over fixed hops |
+| Track 2 task | `EQ`-based statements that collided in the key/value hash | Causal bytecode `[LET, alias, var, SEMI]`, `[ALIAS, var, lit, SEMI]`, `[NOP, var, SEMI, SEMI]`, `[RET, alias, lit, SEMI]` |
+| Dereference target | Predicted at the literal position | Predicted at `pos + 1` (the return alias position), the first causal position where the pointer value is required |
+| Public math | V4 equations | Identical equations, state shapes, and parameter count |
+| Evidence | Two synthetic tracks | Two synthetic tracks with V6 timings and causal-pointer accuracy |
+| Tests | JIT equivalence on three outputs | Four-output equivalence (`h`, hop-1 read, `F` snapshots, surprise) plus causal bytecode backward |
 
-The model equations, parameter count (`207,503`), and O(1) state accounting are unchanged. V5 is a runtime and evidence upgrade, not a new operator.
+The model equations, parameter count (`207,503`), and O(1) inference-state accounting are unchanged. V6 is a runtime and evidence upgrade, not a new operator.
 
 ---
 
@@ -257,14 +259,16 @@ code_logits, code_surprise = model(code_x)  # [4, 82, 64], [4, 82]
 
 All numbers below are generated by `python run_experiment.py` on the reference machine and copied from `results/BENCHMARK_REPORT.md`. They are single-seed results.
 
-### 5.1 JIT timing versus V4
+### 5.1 V6 timing versus V4 and V5
 
 | Measurement | Time | Note |
 | :--- | :---: | :--- |
 | V4 Full, Python per-token loop | 136.0 s | reference run |
-| V5 Full, TorchScript fused scan | 125.3 s | timed 500 steps |
-| V5 / V4 speed ratio | **1.08x** | >1 means faster; <1 means slower |
-| V5 first-call warm-up | 0.5 s | excluded from timed training |
+| V5 Full, TorchScript fused scan | 125.3 s | reference run |
+| V6 Full, vectorized multi-hop scan | **80.0 s** | timed 500 steps |
+| V6 / V4 speed ratio | **1.70x** | >1 means faster; <1 means slower |
+| V6 / V5 speed ratio | **1.57x** | >1 means faster; <1 means slower |
+| V6 first-call warm-up | 0.4 s | excluded from timed training |
 
 Timed training includes data generation, forward, backward, and optimizer steps. Warm-up is excluded. The ratio is a single-seed wall-clock measurement on one machine, not a throughput guarantee.
 
@@ -274,43 +278,43 @@ Timed training includes data generation, forward, backward, and optimizer steps.
 
 | Architecture variant | Parameters | Final val loss | In-domain 2-hop recall | 4x noise-gap extrapolation | Train time |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **TriCore Full (3-in-1)** | 207,503 | **0.0010** | **100.00%** | **100.00%** | 125.3 s |
-| TriCore No Engine I: Surprise Gate | 207,503 | 0.4066 | 91.88% | 84.14% | 97.9 s |
-| TriCore No Engine II: Fast-Weight | 207,503 | 3.0008 | 5.78% | 4.14% | 29.2 s |
-| TriCore No Engine III: Adaptive Loop | 207,503 | 1.8660 | 16.48% | 16.56% | 59.7 s |
-| Vanilla Transformer (2-layer) | 543,744 | 2.3131 | 16.72% | 15.23% | 15.9 s |
+| **TriCore Full (3-in-1)** | 207,503 | **0.0010** | **100.00%** | **100.00%** | 80.0 s |
+| TriCore No Engine I: Surprise Gate | 207,503 | 3.0005 | 5.55% | 4.14% | 62.3 s |
+| TriCore No Engine II: Fast-Weight | 207,503 | 3.0008 | 5.78% | 3.98% | 36.1 s |
+| TriCore No Engine III: Adaptive Loop | 207,503 | 1.8660 | 16.48% | 17.50% | 63.4 s |
+| Vanilla Transformer (2-layer) | 543,744 | 2.3131 | 16.72% | 14.92% | 18.6 s |
 
 ### 5.3 Track 1 reading
 
 1. **Full TriCore solves the task.** It reaches `100.00%` in-domain and `100.00%` at the 4x gap; validation loss is `0.0010`.
-2. **Engine II is the associative memory.** Without fast weights, recall is `5.78% / 4.14%`, below the 6-way chance level of `16.67%`.
-3. **Engine III is the second hop.** Without the latent re-query, recall is `16.48% / 16.56%`, essentially chance.
-4. **Engine I contributes but is not the whole story at this seed.** Removing the write gate gives `91.88% / 84.14%`, a drop of `8.12 / 15.86` points from Full, but not the collapse seen in the V4 record. The result is seed- and protocol-sensitive; the V4 report's `63.44% / 51.41%` is not reproduced.
-5. **The Transformer is at chance.** `16.72% / 15.23%` at this budget; it is not tuned, parameter-matched, or compute-matched. This is not evidence of an attention ceiling.
-6. **JIT helps modestly.** Full is `125.3 s` versus `136.0 s` for the V4 Python loop, a `1.08x` speedup. The Transformer is still much faster (`15.9 s`) because TriCore executes a sequential recurrence and many small matrix products.
+2. **Engine II is the associative memory.** Without fast weights, recall is `5.78% / 3.98%`, below the 6-way chance level of `16.67%`.
+3. **Engine III is the second hop.** Without the latent re-query, recall is `16.48% / 17.50%`, essentially chance.
+4. **Engine I is necessary in this V6 run.** Removing the write gate gives `5.55% / 4.14%`, a collapse to chance. This differs from the V5 record (`91.88% / 84.14%`) even though the equations are unchanged; the vectorized hop path changes the optimization trajectory, and this remains a single-seed result. Do not treat either run as a universal statement about Engine I.
+5. **The Transformer is at chance.** `16.72% / 14.92%` at this budget; it is not tuned, parameter-matched, or compute-matched. This is not evidence of an attention ceiling.
+6. **Vectorizing the hop loop helps materially.** V6 Full is `80.0 s` versus `136.0 s` for V4 (`1.70x`) and `125.3 s` for V5 (`1.57x`). The Transformer is still much faster (`18.6 s`) because TriCore executes a sequential state recurrence and many small matrix products.
 
-### 5.4 Track 2: Contextual Code LM
+### 5.4 Track 2: Causal Bytecode LM
 
-300 steps, batch 32, `lr=3e-3`, seed 42; 6 variables, 6 NOP statements, sequence length 82. Dense next-token cross-entropy; dereference accuracy is measured only at the return-alias position. Fixed evaluation batches use seed 3030.
+450 steps, batch 64, `lr=3e-3`, seed 42; 6 variables, 4 NOP statements, sequence length 80. Training uses the joint loss `0.25 * dense_loss + deref_loss`; evaluation reports dense cross-entropy/PPL and dereference accuracy at the return-alias position `pos + 1`, where the next token is the literal and the input token is only the alias. Fixed evaluation batches use seed 3030.
 
 | Model | Parameters | Validation loss | Validation PPL | Dereference accuracy | Train time |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **TriCore Full (1-layer)** | 207,503 | 0.5914 | **1.81** | **21.09%** | 83.4 s |
-| Vanilla Transformer (2-layer) | 543,744 | 0.6753 | 1.96 | 18.75% | 2.9 s |
+| **TriCore Full (1-layer)** | 207,503 | 1.1529 | **3.17** | **100.00%** | 78.5 s |
+| Vanilla Transformer (2-layer) | 543,744 | 1.2686 | 3.56 | 19.63% | 19.5 s |
 
 The task is a synthetic imperative grammar. Each sample contains, in random statement order:
 
 ```text
-[LET,   var_i,   EQ, lit_i,  SEMI]
-[ALIAS, alias_i, EQ, var_i,  SEMI]
-[NOP,   NOISE,   SEMI]
+[LET,   alias_i, var_i, SEMI]
+[ALIAS, var_i,   lit_i, SEMI]
+[NOP,   var_i,   SEMI,  SEMI]  × 4
 ...
-[RET,   alias_i, lit_i,  SEMI]
+[RET,   alias_i, lit_i, SEMI]
 ```
 
-Variable, alias, and literal namespaces are disjoint. The return uses an alias, so predicting `lit_i` at the alias position requires resolving `alias_i -> var_i -> lit_i` rather than copying a surface token. There are 6 equally likely literals, so chance is `16.67%`.
+Variable, alias, and literal namespaces are disjoint. The `LET` statement binds `alias_i -> var_i`; the `ALIAS` statement binds `var_i -> lit_i`; the return exposes only `alias_i` and places the target `lit_i` at `pos + 1`. Predicting it therefore requires resolving `alias_i -> var_i -> lit_i` rather than copying a surface token. There are 6 equally likely literals, so chance is `16.67%`.
 
-**Reading.** TriCore has a small edge on both PPL and dereference accuracy, but `21.09%` is only `4.42` points above chance and the run is single-seed. This track validates the pipeline and shows a non-degenerate signal; it does **not** establish general code understanding, compositional generalization, or a Transformer-beating result. The Transformer is also near chance. A longer schedule, more variables, or real code would be a different experiment.
+**Reading.** TriCore reaches `PPL 3.17` and `100.00%` dereference accuracy; the Transformer reaches `3.56` and `19.63%`, barely above the 6-way chance level of `16.67%`. The 100% result is on a closed, deterministic synthetic grammar with a fixed statement inventory and no held-out templates, so it demonstrates that the model can learn the intended two-level pointer lookup; it does **not** establish general code understanding, compositional generalization, or a Transformer-beating result on real code. The run is single-seed and the task is small.
 
 ### 5.5 Cache scaling
 
@@ -345,16 +349,16 @@ tricore-arch/
 │   └── tricore_vs_transformer.png
 ├── run_experiment.py        # dual-track training, ablation, cache, report, plot
 ├── requirements.txt         # torch, numpy, matplotlib
-├── pyproject.toml           # installable tricore-arch 0.5.0, MIT
+├── pyproject.toml           # installable tricore-arch 0.6.0, MIT
 ├── LICENSE                  # MIT
 ├── .gitignore               # Python/cache/venv; keeps report and PNGs
-├── SPEC_V2.md               # V5 architecture + contracts
+├── SPEC_V2.md               # V6 architecture + contracts
 └── README.md
 ```
 
 ### 6.1 Installable package
 
-`pyproject.toml` declares `tricore-arch==0.5.0`, Python `>=3.10`, and the runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`. The package name remains `tricore-arch`; the import package is `tricore`.
+`pyproject.toml` declares `tricore-arch==0.6.0`, Python `>=3.10`, and the runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`. The package name remains `tricore-arch`; the import package is `tricore`.
 
 ```bash
 python -m pip install -e .
@@ -378,20 +382,20 @@ python -c "import tricore; print(tricore.__file__)"
 - Recall is computed only at query positions whose target is not `-100`.
 - Full, No Engine I, No Engine II, No Engine III, and a 2-layer Transformer are trained from scratch with the same protocol.
 
-### 7.2 Track 2 — Contextual Code LM
+### 7.2 Track 2 — Causal Bytecode LM
 
-- 6 variables, 6 NOP statements; sequence length `6*(2*5) + 6*3 + 4 = 82`.
-- 300 optimizer steps, batch 32, AdamW, `lr=3e-3`, weight decay `0.01`, cosine decay, gradient clipping `1.0`.
-- Training seed `42`; fixed evaluation batches use seed `3030`, 8 batches of 32.
-- Dense next-token cross-entropy over all non-`-100` positions.
+- 6 variables, 4 NOP statements; sequence length `(6*2 + 4 + 4)*4 = 80`.
+- 450 optimizer steps, batch 64, AdamW, `lr=3e-3`, weight decay `0.01`, cosine decay, gradient clipping `1.0`.
+- Training seed `42`; fixed evaluation batches use seed `3030`, 8 batches of 64.
+- Joint objective `0.25 * dense_loss + deref_loss`; dense cross-entropy is computed over all non-`-100` positions and dereference loss only on the return-alias mask.
 - Dereference accuracy is measured at the single return-alias position, where the target is one of 6 literals (`16.67%` chance).
 - TriCore uses one layer (`d_model=128`, `d_fast=32`, `max_loops=2`); the baseline uses two Transformer layers.
 
 ### 7.3 Timing
 
-- V5 timing includes data generation, forward, backward, and optimizer steps for 500 Full steps.
-- The first scripted call is a warm-up and is excluded; the reported warm-up is 0.5 s.
-- V4's 136.0 s is the previously recorded Python-loop Full run, not a simultaneous measurement.
+- V6 timing includes data generation, forward, backward, and optimizer steps for 500 Full steps.
+- The first scripted call is a warm-up and is excluded from the timed loop.
+- V4's 136.0 s and V5's 125.3 s are previously recorded reference runs, not simultaneous measurements.
 - Timings are single-machine wall-clock values and vary with GPU, driver, PyTorch version, and thermal state.
 
 ### 7.4 What is not controlled
@@ -404,15 +408,16 @@ No multi-seed confidence interval, no hyperparameter search for the Transformer,
 
 ### 8.1 JIT equivalence
 
-`tests/test_v5.py` builds random tensors for `h`, `F`, `prev_k`, projections, and hop parameters, then runs `tricore_fused_scan` and an explicit Python reference over five flag combinations:
+`tests/test_v5.py` builds random tensors for `h`, `F`, `prev_k`, and projections, then runs `tricore_fused_scan` and an explicit Python reference over the four combinations of its two scan flags:
 
-- all three engines enabled
-- No Engine I
-- No Engine II
-- No Engine III
-- all engines disabled
+- `enable_surprise_gate=True, enable_fast_weight=True`
+- `enable_surprise_gate=False, enable_fast_weight=True` (No Engine I)
+- `enable_surprise_gate=True, enable_fast_weight=False` (No Engine II)
+- both flags `False`
 
-All three outputs (`h_seq`, `mem_seq`, `surprise_trace`) must satisfy `torch.allclose(..., atol=1e-6, rtol=1e-5)`. The test also checks the code-task shapes, the dereference mask, and a backward pass with finite gradients.
+Engine III is outside the scripted scan and is covered by the `TriCoreLM` forward/backward test; the causal bytecode task has its own shape, mask, and backward test.
+
+All four outputs (`h_seq`, `r1_seq`, `F_seq`, `surprise_trace`) must satisfy `torch.allclose(..., atol=1e-6, rtol=1e-5)`. The test also checks the causal bytecode shapes, the dereference mask at `pos + 1`, and a backward pass with finite gradients.
 
 Run:
 
@@ -442,13 +447,14 @@ This is a pipeline check, not a result. It compiles the scripted scan, runs both
 
 ## 9. Limitations
 
-- **Single seed.** Every number is one run. No confidence intervals, no seed variance, no significance test. The V5 No-Engine-I result (`91.88% / 84.14%`) differs substantially from the V4 record (`63.44% / 51.41%`); the equations are the same, but optimization and fixed evaluation batches differ.
+- **Single seed.** Every number is one run. No confidence intervals, no seed variance, no significance test. The V6 No-Engine-I result (`5.55% / 4.14%`) differs substantially from the V5 record (`91.88% / 84.14%`); the equations are the same, but the vectorized hop path changes the optimization trajectory and fixed evaluation batches are used.
 - **Synthetic tasks only.** Track 1 is a controlled associative-recall construction. Track 2 is a tiny imperative grammar with disjoint namespaces. Neither is natural language or real code.
-- **Near-chance Track 2.** `21.09%` dereference is only `4.42` points above chance. PPL is lower than the baseline, but the task and budget are small. Do not describe this as code understanding.
-- **JIT is not a kernel.** The speed ratio is `1.08x` on one machine. TorchScript removes Python dispatch but still launches many small CUDA kernels; a custom fused/chunked kernel is future work.
+- **Track 2 is a closed synthetic grammar.** V6 reaches `100.00%` dereference on a deterministic bytecode task with fixed namespaces and no held-out templates. That shows the causal two-level lookup is learnable, not that the model understands real code. The PPL gap over the Transformer (`3.17` vs `3.56`) is also single-seed.
+- **The V6 pass is not a parallel scan.** The state recurrence is still serial. V6 vectorizes only the fixed-hop refinement over `L`; it still launches many small CUDA kernels. The measured speedup is a runtime improvement on one machine, not a hardware-optimal kernel.
 - **Transformer baseline is untuned.** It is not parameter-matched (`543,744` vs `207,503`), not compute-matched, and not tuned. Its chance-level Track 1 result is not an attention ceiling.
+- **Training memory is not O(1).** V6 materializes `F_seq: [B, L, H, d_head, d_head]` for the vectorized hop pass. The 17.00 KiB O(1) claim applies to persistent inference state, not training activations; `F_seq` scales with `L`.
 - **No long-context decode measurement.** The 3,855.1x cache reduction at 32K is arithmetic from state shapes, not a measured serving benchmark.
-- **No 3-5 hop or natural-language evidence.** The router and memory are only tested on 2-hop synthetic chains and the 82-token code grammar.
+- **No 3-5 hop or natural-language evidence.** The router and memory are only tested on 2-hop synthetic chains and the 80-token causal bytecode grammar.
 - **Task-specific ablations.** Engine III was redundant on the V3 single-hop task and is necessary here; Engine I's necessity depends on the noise pattern and seed. Conclusions are conditional.
 - **No production hardening.** No checkpoint format, distributed training, mixed precision, quantization, serving API, or security review.
 
@@ -460,7 +466,7 @@ This is a pipeline check, not a result. It compiles the scripted scan, runs both
 2. **More hops.** 3-5 hop chains, more bridge tokens, and variable `max_loops`; measure whether the router uses or downweights extra re-queries.
 3. **Stronger adversarial writes.** Deletion, overwrite, repeated distractors, and higher noise density.
 4. **Long-context streaming.** Measure decode latency and memory at 32K-128K tokens against a real KV-cache implementation.
-5. **Kernel-level efficiency.** Replace the scripted loop with a fused/chunked scan or a compiled CUDA/Triton kernel; compare against the V5 JIT baseline.
+5. **Kernel-level efficiency.** Replace the scripted state loop with a fused/chunked scan or a compiled CUDA/Triton kernel; compare against the V6 JIT plus vectorized-hop baseline.
 6. **Matched baselines.** Tune the Transformer and match non-position parameters, tokens, and compute.
 7. **Harder code task.** More variables, longer schedules, held-out program templates, and a real code corpus.
 8. **Natural-language pretraining.** Test whether surprise-gated writes and latent re-query transfer beyond synthetic tasks.
@@ -470,13 +476,13 @@ This is a pipeline check, not a result. It compiles the scripted scan, runs both
 ## 11. Citation
 
 ```bibtex
-@misc{tricore2026v5,
-  title        = {TriCore V5: JIT-Fused Surprise-Gated Write Protection,
-                  Causal Fast Weights, and Latent Multi-Hop Synaptic Chaining},
+@misc{tricore2026v6,
+  title        = {TriCore V6: Vectorized Latent Multi-Hop Chaining,
+                  Causal Fast Weights, and a Causal Bytecode Pointer Task},
   author       = {The TriCore Authors},
   year         = {2026},
   howpublished = {Open-source reference implementation},
-  note         = {Version 5; MIT license; single-seed synthetic benchmarks}
+  note         = {Version 6; MIT license; single-seed synthetic benchmarks}
 }
 ```
 
@@ -495,12 +501,14 @@ Issues and pull requests are welcome. Preserve these invariants:
 7. **Write protection.** Engine I retains a learned write gate; `enable_surprise_gate=False` is the unconditional-delta ablation.
 8. **Latent re-query.** Engine III maps the previous read back into query space and re-queries the same `F_mat`; disabling it removes the loop and the refinement MLP.
 9. **Independent ablations.** Flags gate compute without changing parameter registration.
-10. **JIT equivalence.** Any change to `tricore_fused_scan` must pass `tests/test_v5.py` against the Python reference.
+10. **JIT equivalence.** Any change to `tricore_fused_scan` must pass `tests/test_v5.py` against the Python reference on all four returned tensors.
 11. **Fixed loop count.** Do not describe Engine III as adaptive computation time; `max_loops` is a constant.
-12. **Reproducible artifacts.** `python run_experiment.py` must regenerate the report and plot, and state accounting must include `prev_k`.
+12. **Vectorized refinement.** Engine III must re-query `F_seq` with one batched 5-D `matmul` per fixed hop; the Python loop is over `max_loops`, not `L`. The state recurrence remains serial.
+13. **Causal dereference.** Track 2 must mark the return alias position `pos + 1` in `deref_mask`, never the literal position, and `LET`/`ALIAS` must not place the answer beside the query alias.
+14. **Reproducible artifacts.** `python run_experiment.py` must regenerate the report and plot, and state accounting must include `prev_k`.
 
 ---
 
 <p align="center">
-  <i>TriCore V5 — keep a constant state, protect what matters, compile the loop, and chase the latent pointer twice.</i>
+  <i>TriCore V6 — keep a constant state, protect what matters, vectorize the latent loop, and force the pointer to be dereferenced.</i>
 </p>

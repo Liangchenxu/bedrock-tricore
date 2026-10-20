@@ -20,9 +20,11 @@ from tricore import (
 
 
 V4_FULL_TRAIN_TIME = 136.0
+V5_FULL_TRAIN_TIME = 125.3
 CODE_VOCAB_SIZE = 64
 CODE_NUM_VARS = 6
-CODE_NUM_NOISE = 6
+CODE_NUM_QUERIES = 4
+CODE_NUM_NOPS = 4
 
 
 def sync_device(device: str) -> None:
@@ -179,7 +181,7 @@ def build_track1_configs(vocab_size: int):
 
 
 def code_sequence_length() -> int:
-    return CODE_NUM_VARS * 10 + CODE_NUM_NOISE * 3 + 4
+    return (CODE_NUM_VARS * 2 + CODE_NUM_NOPS + CODE_NUM_QUERIES) * 4
 
 
 def build_code_eval_batches(device: str, batch_size: int, batches: int, seed: int):
@@ -190,7 +192,8 @@ def build_code_eval_batches(device: str, batch_size: int, batches: int, seed: in
             generate_contextual_code_lm_batch(
                 batch_size=batch_size,
                 num_vars=CODE_NUM_VARS,
-                num_noise=CODE_NUM_NOISE,
+                num_queries=CODE_NUM_QUERIES,
+                num_nops=CODE_NUM_NOPS,
                 vocab_size=CODE_VOCAB_SIZE,
                 device=device,
             )
@@ -236,16 +239,19 @@ def train_code_lm_config(
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(steps, 1))
 
-    warmup_x, warmup_y, _ = generate_contextual_code_lm_batch(
+    warmup_x, warmup_y, warmup_mask = generate_contextual_code_lm_batch(
         batch_size=batch_size, num_vars=CODE_NUM_VARS,
-        num_noise=CODE_NUM_NOISE, vocab_size=CODE_VOCAB_SIZE, device=device,
+        num_queries=CODE_NUM_QUERIES, num_nops=CODE_NUM_NOPS,
+        vocab_size=CODE_VOCAB_SIZE, device=device,
     )
     sync_device(device)
     warmup_start = time.perf_counter()
     warmup_logits, _ = model(warmup_x)
-    warmup_loss = F.cross_entropy(
+    warmup_dense = F.cross_entropy(
         warmup_logits.view(-1, CODE_VOCAB_SIZE), warmup_y.view(-1), ignore_index=-100
     )
+    warmup_deref = F.cross_entropy(warmup_logits[warmup_mask], warmup_y[warmup_mask])
+    warmup_loss = 0.25 * warmup_dense + warmup_deref
     warmup_loss.backward()
     optimizer.zero_grad(set_to_none=True)
     sync_device(device)
@@ -254,15 +260,18 @@ def train_code_lm_config(
     sync_device(device)
     start_time = time.perf_counter()
     for _ in range(1, steps + 1):
-        x, y, _ = generate_contextual_code_lm_batch(
+        x, y, deref_mask = generate_contextual_code_lm_batch(
             batch_size=batch_size, num_vars=CODE_NUM_VARS,
-            num_noise=CODE_NUM_NOISE, vocab_size=CODE_VOCAB_SIZE, device=device,
+            num_queries=CODE_NUM_QUERIES, num_nops=CODE_NUM_NOPS,
+            vocab_size=CODE_VOCAB_SIZE, device=device,
         )
         optimizer.zero_grad(set_to_none=True)
         logits, _ = model(x)
-        loss = F.cross_entropy(
+        dense_loss = F.cross_entropy(
             logits.view(-1, CODE_VOCAB_SIZE), y.view(-1), ignore_index=-100
         )
+        deref_loss = F.cross_entropy(logits[deref_mask], y[deref_mask])
+        loss = 0.25 * dense_loss + deref_loss
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
@@ -279,6 +288,8 @@ def train_code_lm_config(
         "deref_acc": deref_acc,
         "train_time": train_time,
         "warmup_time": warmup_time,
+        "last_dense_loss": dense_loss.item(),
+        "last_deref_loss": deref_loss.item(),
     }
     print(
         f"[Track 2] {name}: val_loss={val_loss:.4f}, ppl={ppl:.2f}, "
@@ -396,7 +407,7 @@ def plot_results(track1, track2, cache_rows, path: str) -> None:
     axes[1, 1].legend()
     axes[1, 1].grid(True, axis="y", alpha=0.3)
 
-    fig.suptitle("TriCore V5: JIT-Fused Operator, Dual-Track Benchmark", fontsize=15)
+    fig.suptitle("TriCore V6: Vectorized Multi-Hop Scan, Dual-Track Benchmark", fontsize=15)
     plt.tight_layout(rect=(0, 0, 1, 0.97))
     plt.savefig(path, dpi=160)
     plt.close(fig)
@@ -406,33 +417,37 @@ def plot_results(track1, track2, cache_rows, path: str) -> None:
 def write_report(track1, track2, cache_rows, path: str, device: str) -> None:
     full = track1[0]
     full_time = max(full["train_time"], 1e-9)
-    jit_speedup = V4_FULL_TRAIN_TIME / full_time
+    v4_speedup = V4_FULL_TRAIN_TIME / full_time
+    v5_speedup = V5_FULL_TRAIN_TIME / full_time
     seq_lengths, transformer_kb, tricore_kb = cache_rows
     code_len = code_sequence_length()
     chance = 100.0 / CODE_NUM_VARS
     packaging = all(os.path.exists(p) for p in ("LICENSE", ".gitignore", "pyproject.toml"))
 
     lines = [
-        "# TriCore V5 Experimental Benchmark Report\n",
+        "# TriCore V6 Experimental Benchmark Report\n",
         f"- **Compute Device:** `{device.upper()}`",
-        "- **Operator:** TorchScript JIT-fused TriCore scan (mathematically equivalent to V4)",
+        "- **Operator:** TorchScript JIT recurrent scan + vectorized parallel multi-hop Engine III",
         "- **Track 1:** 2-Hop Chained Associative Recall with adversarial distractor gap; "
         "500 optimizer steps, batch 64, lr 3e-3, seed 42; 6 chains, 4 queries, 16 training noise tokens.",
-        f"- **Track 2:** Contextual Code LM; 300 optimizer steps, batch 32, lr 3e-3, seed 42; "
-        f"{CODE_NUM_VARS} variables, {CODE_NUM_NOISE} NOP statements, sequence length {code_len}.",
+        f"- **Track 2:** Causal-bytecode Contextual Code LM; 450 optimizer steps, batch 64, lr 3e-3, seed 42; "
+        f"{CODE_NUM_VARS} variables, {CODE_NUM_NOPS} NOP statements, sequence length {code_len}; "
+        "joint loss `0.25 * dense_loss + deref_loss`.",
         f"- **Open-source packaging:** `{'ready' if packaging else 'pending'}` "
         "(MIT LICENSE, .gitignore, pyproject.toml)\n",
         "## 1. JIT Fusion and Track 1 Ablation\n",
-        "### 1.1 JIT timing versus V4\n",
+        "### 1.1 JIT timing versus V4 and V5\n",
         "| Measurement | Time | Note |",
         "| :--- | :---: | :--- |",
         f"| V4 Full, Python per-token loop | {V4_FULL_TRAIN_TIME:.1f} s | reference run |",
-        f"| V5 Full, TorchScript fused scan | {full['train_time']:.1f} s | timed 500 steps |",
-        f"| V5 / V4 speed ratio | {jit_speedup:.2f}x | >1 means faster; <1 means slower |",
-        f"| V5 first-call warm-up | {full['warmup_time']:.1f} s | excluded from timed training |",
+        f"| V5 Full, TorchScript fused scan | {V5_FULL_TRAIN_TIME:.1f} s | reference run |",
+        f"| V6 Full, vectorized multi-hop scan | {full['train_time']:.1f} s | timed 500 steps |",
+        f"| V6 / V4 speed ratio | {v4_speedup:.2f}x | >1 means faster; <1 means slower |",
+        f"| V6 / V5 speed ratio | {v5_speedup:.2f}x | >1 means faster; <1 means slower |",
+        f"| V6 first-call warm-up | {full['warmup_time']:.1f} s | excluded from timed training |",
         "",
-        "The comparison uses the previously recorded V4 Full time of 136.0 s. "
-        "The warm-up call is excluded from the timed V5 run; timed training includes data generation, "
+        "The comparison uses the previously recorded V4 Full time of 136.0 s and V5 Full time of 125.3 s. "
+        "The warm-up call is excluded from the timed V6 run; timed training includes data generation, "
         "forward, backward, and optimizer steps.\n",
         "### 1.2 Five-way ablation\n",
         "| Architecture Variant | Parameters | Final Val Loss | In-Domain 2-Hop Recall (%) | 4x Noise-Gap Extrapolation (%) | Train Time (s) |",
@@ -489,11 +504,11 @@ def write_report(track1, track2, cache_rows, path: str, device: str) -> None:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="TriCore V5 dual-track benchmark")
+    parser = argparse.ArgumentParser(description="TriCore V6 dual-track benchmark")
     parser.add_argument("--steps", type=int, default=500, help="Track 1 optimizer steps")
-    parser.add_argument("--code-steps", type=int, default=300, help="Track 2 optimizer steps")
+    parser.add_argument("--code-steps", type=int, default=450, help="Track 2 optimizer steps")
     parser.add_argument("--batch-size", type=int, default=64, help="Track 1 batch size")
-    parser.add_argument("--code-batch-size", type=int, default=32, help="Track 2 batch size")
+    parser.add_argument("--code-batch-size", type=int, default=64, help="Track 2 batch size")
     parser.add_argument("--lr", type=float, default=3e-3, help="Track 1 learning rate")
     parser.add_argument("--code-lr", type=float, default=3e-3, help="Track 2 learning rate")
     parser.add_argument("--eval-batches", type=int, default=10, help="Track 1 eval batches")
@@ -512,7 +527,7 @@ def main():
         device = "cuda" if torch.cuda.is_available() else "cpu"
     else:
         device = args.device
-    print(f"=== TriCore V5 dual-track benchmark on {device.upper()} ===")
+    print(f"=== TriCore V6 dual-track benchmark on {device.upper()} ===")
 
     eval_sets = build_mqar_eval_sets(64, device, args.eval_batches)
     code_eval = build_code_eval_batches(
@@ -540,7 +555,7 @@ def main():
 
     plot_results(track1, track2, cache_rows, args.plot)
     write_report(track1, track2, cache_rows, args.report, device)
-    print("V5 benchmark complete.")
+    print("V6 benchmark complete.")
 
 
 if __name__ == "__main__":
