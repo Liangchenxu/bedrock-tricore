@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tricore-arch"
-version = "1.2.0"
-description = "Attention-free constant-state sequence operator with zero-F_seq JIT training, native O(1) streaming, multi-seed verified multi-hop memory, and real 32K CUDA cache profiling"
+version = "1.3.0"
+description = "Attention-free constant-state operator with a synaptic eligibility trace for infix EQ binding, native O(1) streaming, and 100% fair Engine ablations"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }

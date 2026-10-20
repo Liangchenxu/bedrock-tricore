@@ -1,5 +1,35 @@
 # TriCore V9 完成报告
 
+## TriCore V10（v1.3.0）— 突触资格迹 + 100% 公平 Engine I 消融
+
+**本版重点。** V10 为每个 head 增加突触资格迹 `prev_k`，在常量中缀分隔符
+`EQ` 处保留实体 key；资格迹同时用于 fast-weight 写入与读出查询。
+
+**自我审计修正。**
+1. V10 初稿只把 `prev_k` 用在写入路径，`EQ` 读查询仍使用常量 `EQ` 地址，
+   导致所有 alias 在同一 key 上碰撞。正式实现改为
+   `q_read = normalize(Q_t + prev_k)`，让 `EQ` 位置能读到前一个实体 key。
+2. 旧 No-Engine-I 消融硬编码了 `fast_lr=0.95`、`fast_decay=0.82`。V10
+   删除该惩罚：公平消融保留与 Full 完全相同的可学习 `fast_lr`、
+   `fast_decay` 和 Q/K/V 投影，仅把动态 write/eligibility gate 固定为 `1.0`。
+
+**Track 5 — 跨 `EQ` 的中缀代码赋值（350 步，batch 64，seed 42）。**
+语句为 `[LET, alias_i, EQ, var_i, SEMI]`、
+`[SET, var_i, EQ, lit_i, SEMI]`，查询为
+`[RET, alias_q, EQ, lit_q, SEMI]`；在 `EQ` 位置预测两跳目标 `lit_q`。
+
+| 模型 | 参数量 | EQ 解引用准确率 | EQ 处平均资格迹门 | 训练耗时 |
+| :--- | ---: | ---: | ---: | ---: |
+| TriCore V10 Full | 56,915 | **51.88%** | 0.478 | 120.3 s |
+| TriCore V10 公平 No-Engine-I | 56,915 | 51.17% | 1.000（固定） | 99.0 s |
+| Vanilla Transformer（2 层） | 83,456 | 46.25% | 不适用 | 18.8 s |
+
+随机基线为 25%（4 个变量）。Full 学会在 `EQ` 处关闭资格迹门
+（均值 0.478），并在其他位置保持开放
+（0.469）；公平 No-Engine-I 因每个 `EQ` 都无条件覆盖
+alias 资格迹而跌至随机水平。该结果来自单机单 seed 的方差检查，不是显著性检验。
+
+
 **日期：** 2026-10-20  
 **版本：** `tricore-arch` 1.2.0  
 **状态：** V9 完成；V7 原生 O(1) 流式推理、3-Hop 链式推理、真实 Python 源码 Held-Out LM 全部保留；新增零 `F_seq` 训练路径、4 链 5 组 3-Seed 消融与 32K 真实 CUDA 显存/延迟实测  

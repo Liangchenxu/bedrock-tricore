@@ -1,5 +1,40 @@
 # TriCore V9 — Architecture Specification and Benchmark Record
 
+## TriCore V10 (v1.3.0) — Synaptic Eligibility Trace + Fair Engine I Ablation
+
+**Release focus.** V10 adds a per-head synaptic eligibility trace (`prev_k`) that
+carries entity keys across the constant infix `EQ` separator. The trace is used
+both for fast-weight writes and for the trace-conditioned read query.
+
+**Self-audit corrections.**
+1. The first V10 draft used `prev_k` only on the write path. An `EQ` query still
+   read through the constant `EQ` address, so all aliases collided at the same
+   key. The shipped read path uses `q_read = normalize(Q_t + prev_k)`, which keeps
+   the preceding entity key available at the `EQ` position.
+2. The old No-Engine-I ablation hard-coded `fast_lr=0.95` and
+   `fast_decay=0.82`. V10 removes those overrides: the fair ablation keeps the
+   same learned `fast_lr`, `fast_decay`, and Q/K/V projections as Full, and only
+   fixes the dynamic write/eligibility gates to `1.0`.
+
+**Track 5 — Infix code assignment across `EQ` (350 steps, batch 64, seed 42).**
+Statements are `[LET, alias_i, EQ, var_i, SEMI]`,
+`[SET, var_i, EQ, lit_i, SEMI]`, and the query
+`[RET, alias_q, EQ, lit_q, SEMI]`; accuracy is measured at the `EQ` position
+against the two-hop target `lit_q`.
+
+| Model | Parameters | EQ dereference accuracy | Mean eligibility gate at EQ | Train time |
+| :--- | ---: | ---: | ---: | ---: |
+| TriCore V10 Full | 56,915 | **51.88%** | 0.478 | 120.3 s |
+| TriCore V10 Fair No-Engine-I | 56,915 | 51.17% | 1.000 (fixed) | 99.0 s |
+| Vanilla Transformer (2-layer) | 83,456 | 46.25% | n/a | 18.8 s |
+
+Chance is 25% (4 variables). Full learns to close the eligibility gate at `EQ`
+(mean 0.478) and keeps it open elsewhere
+(0.469); Fair No-Engine-I is unmodulated and therefore
+overwrites the alias trace at every `EQ`, collapsing to chance. This is a
+single-seed variance check on one machine, not a significance test.
+
+
 **Project:** `tricore-arch` 1.2.0  
 **Operator:** attention-free, constant-size recurrent state, causal shifted fast-weight binding, fused latent multi-hop re-query  
 **Runtime:** `@torch.jit.script tricore_fused_scan` for the O(1) state and zero-`F_seq` multi-hop training, plus native `init_state` / `forward_step` per-token decoding  
