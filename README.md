@@ -1,17 +1,20 @@
-# TriCore V3
+# TriCore V5
 
-**An attention-free sequence operator with a constant-size recurrent state, causal shifted fast-weight binding, and surprise-scaled refinement.**
+**A JIT-fused, attention-free sequence operator with a 17 KiB constant-size inference state, latent multi-hop synaptic chaining, and a dual-track evidence package.**
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
-[![CUDA](https://img.shields.io/badge/CUDA-Ready-76B900?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
-[![Tests](https://img.shields.io/badge/sanity%20test-passing-brightgreen)](#verification)
+[![TorchScript](https://img.shields.io/badge/TorchScript-JIT%20fused-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/docs/stable/jit.html)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-sanity%20%2B%20JIT%20equivalence-brightgreen)](#8-verification)
 
-> **Status:** experimental research reference, not a production language model. Every number below comes from a single-seed, 600-step synthetic MQAR run. Read [Limitations](#limitations) before generalizing.
+> **Status:** experimental research reference, not a production language model. V5 keeps the V4 equations and adds a TorchScript-JIT recurrent kernel plus a second synthetic track. All reported numbers are single-seed runs. Read [Limitations](#9-limitations) before generalizing.
 
-> **TL;DR.** On the controlled Multi-Query Associative Recall (MQAR) benchmark, Full TriCore reaches **100.00% in-domain recall** and **99.45% recall under a 4x longer distractor gap**, with a **33 KB reported O(1) state** instead of a KV cache that grows with context. Removing fast weights collapses recall to **3.28% / 3.83%**, identifying causal shifted key-value binding as the decisive mechanism. Removing the adaptive loop changes nothing measurable on this task. The implementation is slower than the Transformer baseline because its recurrence is a Python per-token loop.
+> **TL;DR (Track 1, 2-Hop MQAR).** Full TriCore reaches **100.00% in-domain recall** and **100.00% recall under a 4x longer adversarial distractor gap** with a **17.00 KiB O(1) state**. Removing Engine I gives **91.88% / 84.14%**; removing Engine II gives **5.78% / 4.14%**; removing Engine III gives **16.48% / 16.56%**. A 2-layer Transformer reaches **16.72% / 15.23%**, which is chance at this budget. The JIT-fused Full run takes **125.3 s** for 500 steps versus **136.0 s** for the V4 Python loop (**1.08x** faster), excluding a 0.5 s warm-up.
 
-> **中文速览.** TriCore V3 是一个无注意力、推理状态为 O(1) 的序列算子。在 600 步、单 seed 的受控 MQAR 任务上，Full 版本达到 100.00% 域内召回与 99.45% 的 4× 噪声间隔外推；去掉快权重后跌至 3.28% / 3.83%，说明“因果移位键值绑定”是核心。Engine III 在该任务上没有可测增益，不应被宣传为精度来源。按报告口径，O(1) 状态为 33 KB，而 Transformer 在 32K 上下文下 KV cache 为 65,536 KB（约 1985.9×）；若计入实现中的 `prev_k`，真实常驻状态约 34 KB。TriCore 当前 Python 逐 token 实现比 Transformer 慢，且结果不外推到自然语言或大规模训练。
+> **TL;DR (Track 2, Contextual Code LM).** TriCore (1 layer) reaches validation **PPL 1.81** and **21.09% dereference accuracy**; the 2-layer Transformer reaches **PPL 1.96** and **18.75%**. The 6-way chance level is **16.67%**. This is a small edge on a synthetic grammar, not evidence of general code understanding.
+
+> **中文速览.** TriCore V5 保持 V4 的全部数学公式，把逐 token 的 Python 循环替换为 `@torch.jit.script` 融合扫描，并新增“上下文代码语言建模”第二赛道。Track 1 中 Full 达到 **100.00% 域内召回 / 100.00% 四倍噪声间隔外推**，单核推理状态恒为 **17.00 KB**；去掉 Engine I 为 91.88%/84.14%，去掉 Engine II 为 5.78%/4.14%，去掉 Engine III 为 16.48%/16.56%，2 层 Transformer 为 16.72%/15.23%。Full 训练 **125.3 s**，对比 V4 Python 循环 **136.0 s**，JIT 加速 **1.08×**。Track 2 中 TriCore 验证 PPL **1.81**、解引用准确率 **21.09%**；Transformer 为 **1.96 / 18.75%**，6 类随机基线为 16.67%。结论仅限单 seed 合成任务，不代表自然语言或真实代码能力。
 
 ---
 
@@ -19,7 +22,7 @@
 
 - [1. The problem](#1-the-problem)
 - [2. Architecture](#2-architecture)
-- [3. What changed in V3](#3-what-changed-in-v3)
+- [3. What changed in V5](#3-what-changed-in-v5)
 - [4. Quick start](#4-quick-start)
 - [5. Benchmark](#5-benchmark)
 - [6. Repository layout](#6-repository-layout)
@@ -39,267 +42,289 @@ Attention is a powerful sequence mixer, but it carries two structural costs:
 1. **Quadratic sequence mixing.** Self-attention compares every token with every other token, so compute and activation memory grow as `O(L^2)`.
 2. **Linear inference cache.** Every layer stores keys and values for every past token. The KV cache grows as `O(L)` and dominates long-context decoding.
 
-A third limitation is less discussed: the weights of a trained Transformer are static at inference time. It can attend to context, but it cannot perform a local, associative write into its own state without another forward pass.
+Associative recall adds a third requirement. A single fast-weight lookup can learn `key -> value`; it cannot follow `key -> bridge -> value` unless the model can use the first retrieved item as the query for a second retrieval. Stacking another physical layer is one answer. TriCore tests another:
 
-TriCore explores a different trade-off:
+> **Can one constant-state core perform multiple associative reads by looping the retrieved latent back through the same fast weights?**
 
-> **Can a sequence model keep a constant-size state, write key-value associations into fast weights, and spend refinement compute only where prediction error is high?**
+V5 also asks a practical question that V4 could not answer:
 
-The answer validated here is deliberately narrow. On MQAR, a causal shifted fast-weight memory solves the associative recall task with an O(1) state. This README does **not** claim that the same result transfers to natural language, reasoning, or scale. It documents the operator, the exact equations, the ablation, and the boundary of the evidence.
+> **Does replacing the Python per-token recurrence with a TorchScript-JIT scan remove enough host overhead to make the operator competitive in wall-clock training?**
+
+The answers are deliberately narrow. On a controlled 2-hop task, a causal shifted delta-rule memory plus a latent re-query loop solves the task with an O(1) inference state. The JIT scan is **1.08x** faster than the V4 Python loop on the reference machine, but it is still a compiled loop of tensor operations, not a custom CUDA kernel, and it remains much slower than a 2-layer Transformer on these short sequences. The second track is a synthetic code-like grammar, not human code.
 
 ### Design goals
 
-| Goal | TriCore V3 mechanism | Evidence in this repository |
+| Goal | V5 mechanism | Evidence |
 | :--- | :--- | :--- |
-| No attention | Causal convolution + recurrent state + fast weights | `tricore/model.py` contains no softmax attention |
-| O(1) inference state | `h_t` and `F_t` have shapes independent of `L` | State-cache table below |
-| Associative memory | Causal `K_{t-1} -> V_t` delta-rule writes | No-Fast-Weight ablation collapses to 3.28% |
-| Test-time adaptation | Local delta-rule update, no inference-time backprop | Engine II equations |
-| Surprise-aware compute | Prediction-error gate scales state updates and refinement | Engine I / III equations |
-| Independent ablations | `enable_fast_weight`, `enable_adaptive_loop` | Four-way benchmark |
+| No attention over positions | Only the hop router uses softmax, over `max_loops + 1` slots | Five-way Track 1 table |
+| O(1) inference state | `h`, `F_mat`, `prev_k` | 17.00 KiB per sample; 3,855.1x smaller than a 2-layer KV cache at 32K |
+| Multi-hop with one core | Latent re-query of the same fast weights | Full 100% versus 16.48% without Engine III |
+| Selective writes | Learned surprise-gated write protection | Full 100% versus 91.88% without Engine I at this seed |
+| Faster recurrence | TorchScript-JIT fused scan | 125.3 s versus 136.0 s (V4) |
+| Second task | Contextual Code LM with alias dereference | PPL 1.81, deref 21.09% (chance 16.67%) |
+| Open-source packaging | MIT license, `pyproject.toml`, `.gitignore`, tests | [Repository layout](#6-repository-layout) |
 
 ---
 
 ## 2. Architecture
 
-**Notation.** `x_t ∈ R^D` is the input at position `t`; `LN` is layer normalization; `σ` is the sigmoid; `⊙` is elementwise multiplication; `normalize(·)` is L2 normalization over the head dimension. The implementation uses `D = 128`, `H = 4` heads, `d_head = 32`, `L_max = 2`, and two layers.
+TriCore is a residual sequence block with three independently ablatable engines. `D=128`, `H=4`, and `d_head=32` are the reference settings. There is no positional embedding and no attention over sequence positions.
 
 ### 2.1 Causal input path
 
-The block first computes a local, causal feature stream. The depthwise convolution has kernel size 3, left padding 2, and the output is truncated to length `L`:
-
 ```math
-u_t = \operatorname{LN}(x_t), \qquad
-c_t = \operatorname{SiLU}\!\left(b + \sum_{j=0}^{2} w_j \odot u_{t-j}\right),
-\qquad
-\tilde{u}_t = W_u c_t + b_u .
-```
-
-`c_t` depends only on `u_{t-2}, u_{t-1}, u_t`. There is no future leakage. Q, K, V, and `ũ` are projected for all positions in parallel before the recurrence; only the state update itself is sequential.
-
-### 2.2 Engine I — surprise-gated state collapse
-
-Engine I compresses the local feature stream into a persistent vector state `h_t ∈ R^D`:
-
-```math
-e_t = \left| \tilde{u}_t - h_{t-1} \right|,
+u_t = \operatorname{LN}(x_t), \qquad \tilde{u}_t = \operatorname{SiLU}(W_u u_t + b_u)
 ```
 
 ```math
-g_t = \sigma\!\left(W_s e_t + b_s\right),
+a_t = \operatorname{normalize}(W_a u_t)
 ```
 
 ```math
-h_t = \lambda \odot \left(1 - \tfrac{1}{2} g_t\right) \odot h_{t-1}
-      + g_t \odot \tilde{u}_t,
-\qquad
-\lambda = \sigma(\lambda_{\text{logit}}) \in (0,1)^D .
-```
-
-The scalar surprise signal is the mean gate response:
-
-```math
-s_t = \frac{1}{D}\sum_{j=1}^{D} g_{t,j} \in (0,1).
-```
-
-`e_t` is an absolute prediction error against the compressed state. `g_t` is a learned gate, not a calibrated entropy estimate; `s_t` is therefore a **surprise proxy**, not information-theoretic surprise. A larger `g_t` writes more of the current feature and decays the old state more strongly. The `1 - 0.5 g_t` factor keeps the decay in `(0.5, 1)`.
-
-**State:** `h_t` is `D` floats per layer, independent of sequence length.
-
-### 2.3 Engine II — causal shifted multi-head fast weights
-
-This is the V3 core. A conventional fast-weight update at time `t` would bind the current key `K_t` to the current value `V_t`. MQAR pairs are adjacent: a key appears at `t-1`, its value at `t`. V3 therefore writes the **previous token's key** into the **current token's value**:
-
-```math
-Q_t = \operatorname{normalize}\!\left(W_q u_t\right), \qquad
-K_t = \operatorname{normalize}\!\left(W_k u_t\right), \qquad
-V_t = W_v c_t,
-```
-
-with `Q_t, K_t, V_t ∈ R^{H × d_head}`. For each head, the fast-weight matrix is `F_t ∈ R^{d_head × d_head}`, initialized as `F_0 = 0`. The shifted delta-rule write is
-
-```math
-F_t =
-\lambda_f \odot F_{t-1}
-+ \eta_{\text{eff},t} \odot
-\left(V_t - F_{t-1} K_{t-1}\right) K_{t-1}^{\top},
-\qquad t > 0,
+Q_t = \operatorname{normalize}(a_t + 0.15 W_q u_t), \quad
+K_t = \operatorname{normalize}(a_t + 0.15 W_k u_t), \quad
+V_t = a_t + 0.15 W_v u_t
 ```
 
 ```math
-\eta_{\text{eff},t} = \eta \odot \left(0.3 + 0.7\, s_t\right),
-\qquad
-\eta = 0.9\,\sigma(\eta_{\text{logit}}),
-\qquad
-\lambda_f = \sigma(\lambda_{f,\text{logit}}).
+w_t^{\text{hop}} = \operatorname{softmax}(W_r u_t)
 ```
 
-The read uses the **current** query and the **updated** matrix:
+`Q/K/V` have shape `[B, L, H, d_head]`; the hop router has shape `[B, L, L_max+1]`. All L2 normalization is over the head dimension. The shared normalized address `a_t` keeps a retrieved bridge compatible with the next query.
+
+### 2.2 Engine I — surprise-gated state collapse and write protection
+
+Initial state: `h_0 = 0`, shape `[B, D]`.
 
 ```math
-r_t = F_t Q_t, \qquad
-z_t = h_t + W_o \operatorname{vec}(r_t).
-```
-
-At `t = 0` there is no previous key, so no write occurs; the read returns zero. This is why the first token has no associative memory. The implementation keeps `prev_k ∈ R^{H × d_head}` as the only additional recurrent state.
-
-Why the shift matters: in a next-token MQAR stream, `(K_{t-1}, V_t)` is an adjacent key-value pair. Binding it at `t`, then querying with a later occurrence of the key, retrieves the value. Binding `(K_t, V_t)` instead stores self-pairs and cannot solve the task — this was the central V2 bottleneck. Q/K L2 normalization makes retrieval sharp; V is left unnormalized so values retain magnitude. The learning rate is surprise-modulated, but the write is a local delta rule, not gradient descent at inference time.
-
-**State:** `F_t` is `H · d_head² = 4096` floats per layer, plus `prev_k` of `H · d_head = 128` floats. Both are independent of `L`.
-
-### 2.4 Engine III — surprise-scaled equilibrium refinement
-
-Engine III refines the memory output with a shared MLP. It runs a **fixed** number of steps, `L_max = 2`. Surprise changes the step size, not the number of steps:
-
-```math
-z_t^{(0)} = z_t,
+e_t = |\tilde{u}_t - h_{t-1}|, \qquad g_t = \sigma(W_s u_t + e_t)
 ```
 
 ```math
-z_t^{(i+1)} = z_t^{(i)}
-+ \frac{s_t}{i+1}\,
-\operatorname{MLP}\!\left(\operatorname{LN}\!\left(z_t^{(i)}\right)\right),
-\qquad i = 0, \ldots, L_{\max}-1.
+s_t = \frac{1}{D}\sum_j g_{t,j}, \qquad
+\omega_t = \sigma(W_g u_t + s_t - 0.5)
 ```
-
-The loop is vectorized across all positions `t`; only `L_max` sequential MLP calls occur per block, not `L` calls. The block output is
 
 ```math
-y_t = x_t + \operatorname{LN}\!\left(z_t^{(L_{\max})}\right).
+\eta_{\text{eff},t} = \eta \odot \omega_t
 ```
 
-Engine III has no persistent state of its own. It is an optional refinement path, and the ablation below shows that it is **not** responsible for MQAR accuracy at this budget.
-
-### 2.5 One-block summary
-
-```text
-x
-├─ LN ── causal depthwise conv (k=3) ── SiLU ── W_u ── ũ
-├─ Engine I:  e_t = |ũ_t - h_{t-1}|;  g_t = σ(W_s e_t)
-│             h_t = λ ⊙ (1 - 0.5 g_t) ⊙ h_{t-1} + g_t ⊙ ũ_t
-│             s_t = mean(g_t)
-├─ Engine II: Q,K,V = projections of u / c;  Q,K are L2-normalized
-│             F_t = λ_f ⊙ F_{t-1} + η_eff ⊙ (V_t - F_{t-1}K_{t-1})K_{t-1}ᵀ
-│             r_t = F_t Q_t;  z_t = h_t + W_o r_t
-├─ Engine III: z ← z + (s_t / (i+1)) · MLP(LN(z)),  i = 0..L_max-1
-└─ y = x + LN(z)
+```math
+h_t = \lambda \odot (1 - 0.5 g_t) \odot h_{t-1} + g_t \odot \tilde{u}_t
 ```
+
+`lambda` is `sigmoid(base_decay_logit)` with shape `[D]`; `eta` is `sigmoid(fast_lr_logit)` with shape `[1, H, 1, 1]`. The write gate is per head and shared across that head's matrix. When `enable_surprise_gate=False`, the block uses `g_t=0.5`, `s_t=0.5`, `eta_eff=1.0`, `decay=1.0`, and no learned write gate.
+
+### 2.3 Engine II — causal shifted fast weights
+
+Initial state: `F_0 = 0`, shape `[B, H, d_head, d_head]`; `prev_k = 0`, shape `[B, H, d_head, 1]`.
+
+For `t > 0`:
+
+```math
+F_t = \lambda_f \odot F_{t-1}
++ \eta_{\text{eff},t} \odot (V_t - F_{t-1}K_{t-1})K_{t-1}^{\top}
+```
+
+The read happens after the write:
+
+```math
+r_t^{(0)} = F_t Q_t
+```
+
+At `t=0`, no write occurs and the first read is zero. At the end of each step, `prev_k = K_t`, so the next write binds the previous key to the current value. The write is causal and shifted: in a `[k_i, m_i, 0]` block it binds `k_i -> m_i`; in a `[m_i, v_i, 0]` block it binds `m_i -> v_i`.
+
+### 2.4 Engine III — latent multi-hop synaptic equilibrium loop
+
+```math
+r^{(0)} = r_t^{(0)}, \qquad r_{\text{accum}} = w_{t,0}^{\text{hop}} r^{(0)}
+```
+
+For `i = 0, \ldots, L_{\max}-1`:
+
+```math
+q^{(i+1)} = \operatorname{normalize}\left(r^{(i)} + H_i r^{(i)}\right)
+```
+
+```math
+r^{(i+1)} = F_t q^{(i+1)}, \qquad
+r_{\text{accum}} \leftarrow r_{\text{accum}} + w_{t,i+1}^{\text{hop}} r^{(i+1)}
+```
+
+`r^(i)` is `[B, H, d_head, 1]`; `H_i` is `[1, H, d_head, d_head]`; normalization is L2 over `dim=-2`. With `max_loops=2`, the initial read is hop 1, the first re-query is hop 2, and the second re-query is an extra latent refinement. The loop count is fixed; the router changes weights, not depth.
+
+### 2.5 Readout
+
+```math
+z_t = h_t + W_o \operatorname{vec}(r_t^{\text{out}})
+```
+
+```math
+z_t \leftarrow z_t + s_t \odot \operatorname{MLP}(\operatorname{LN}(z_t)), \qquad
+y_t = x_t + \operatorname{LN}(z_t)
+```
+
+When `enable_adaptive_loop=False`, `r_t^out = r_t^(0)` and the refinement MLP is skipped. When `enable_fast_weight=False`, Engine II is skipped, `z=h_seq`, and Engine III has no memory to read. All modules are constructed regardless of flags, so all TriCore variants report the same parameter count.
+
+### 2.6 TorchScript-JIT fused scan
+
+V5 moves the entire recurrent scan into one scripted function:
+
+```python
+@torch.jit.script
+def tricore_fused_scan(
+    u_feat, u_surp_bias, w_gate_logits, hop_weights, Q, K, V,
+    base_decay, fast_decay, fast_lr, hop_proj,
+    enable_surprise_gate, enable_fast_weight, enable_adaptive_loop, max_loops,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ...
+```
+
+The function owns the exact state `h [B,D]`, `F_mat [B,H,d_head,d_head]`, and `prev_k [B,H,d_head,1]`; it never materializes a `[B,L,...]` fast-weight cache. The per-token loop is compiled once, removes Python dispatch from the hot path, and returns:
+
+- `h_seq: [B, L, D]`
+- `mem_seq: [B, L, H*d_head]` (zeros when `enable_fast_weight=False`)
+- `surprise_trace: [B, L]`
+
+`TriCoreBlock` precomputes projections and calls the scan with keyword arguments. The JIT path is mathematically equivalent to the V4 Python loop. `tests/test_v5.py` compares the scripted function against an explicit Python reference for all-engines, each single-engine ablation, and all-disabled, asserting `allclose` on all three outputs.
+
+This is **not** a custom CUDA kernel. It is a compiled graph of PyTorch tensor operations, so it still pays kernel-launch and small-matrix costs. It is a runtime cleanup, not a hardware-optimal scan.
 
 ---
 
-## 3. What changed in V3
+## 3. What changed in V5
 
-V3 is a targeted repair of the first benchmark's mathematical bottleneck, not a cosmetic refactor:
+| Area | V4 | V5 |
+| :--- | :--- | :--- |
+| Recurrence | Python per-token loop in `forward` | Single `@torch.jit.script tricore_fused_scan` |
+| Public math | Reference equations | Identical equations and state shapes |
+| Tasks | 2-Hop MQAR only | 2-Hop MQAR + Contextual Code LM |
+| Evidence | One 500-step track | Two tracks with separate protocols |
+| Speed measurement | Not isolated | V4 136.0 s vs V5 125.3 s Full, 1.08x |
+| Tests | Shape/gradient sanity | Plus JIT-vs-Python equivalence and code-task backward |
+| Packaging | README/spec only | MIT `LICENSE`, `.gitignore`, `pyproject.toml` |
+| Report | Single-track report | `results/BENCHMARK_REPORT.md` with JIT, both tracks, cache |
 
-| Change | V2 behavior | V3 behavior | Why it matters |
-| :--- | :--- | :--- | :--- |
-| Fast-weight binding | `K_t -> V_t` self-binding | `K_{t-1} -> V_t` causal shifted binding | MQAR keys precede values; self-pairs cannot be retrieved by a later query |
-| Head structure | Single fast-weight matrix | `H = 4` independent `d_head × d_head` matrices | Multiple associative subspaces; retrieval is less interference-prone |
-| Projection placement | Linear layers inside the token loop | Q/K/V, `ũ`, and conv computed in parallel across `L` | Fewer Python-level operations; same math |
-| Recall normalization | LayerNorm on recalled memory | No LayerNorm on the raw read | Avoids amplifying near-zero memory noise at early steps |
-| Engine III placement | Per-token sequential MLP | Vectorized across `L`, fixed `L_max` loop | GPU-friendly refinement; surprise scales step size, not depth |
-
-The core loop remains deliberately readable PyTorch. It has **no attention**, no softmax over sequence positions, and no explicit positional embedding. The only *sequential* work is the per-token recurrence; all projections and the Engine III refinement are parallel across `L`. The persistent state shapes do not depend on `L`.
+The model equations, parameter count (`207,503`), and O(1) state accounting are unchanged. V5 is a runtime and evidence upgrade, not a new operator.
 
 ---
 
 ## 4. Quick start
 
 ```bash
-# 1. Install the three runtime dependencies
+# From the repository root
+python -m pip install -e .
+
+# Or install only the runtime dependencies
 python -m pip install -r requirements.txt
 
-# 2. Gradient, shape, and O(1) state sanity check
-python tests/test_sanity.py
-
-# 3. Full four-way benchmark (600 steps, batch 64)
+# Run the full dual-track experiment (regenerates report + plot)
 python run_experiment.py
+
+# Quick smoke run
+python run_experiment.py --steps 2 --code-steps 2
+
+# Tests
+python -m pytest -q
 ```
 
-The experiment writes:
+`run_experiment.py` writes:
 
-- `results/BENCHMARK_REPORT.md` — machine-generated tables;
-- `results/tricore_vs_transformer.png` — loss, recall, and cache-scaling plots.
+- `results/BENCHMARK_REPORT.md` — generated tables and protocol notes
+- `results/tricore_vs_transformer.png` — 2x2 panel: Track 1 learning curves, Track 1 ablation bars, Track 2 PPL, Track 2 dereference accuracy
 
-A CUDA device is used when available. The CPU fallback is functionally identical but slower. The reference environment is Python 3.13.5, PyTorch 2.7.1+cu118, NumPy 1.26.4, and Matplotlib 3.10.9.
-
-Minimal API:
+The device is selected automatically: CUDA if available, otherwise CPU. The script uses AdamW, cosine decay, gradient clipping at 1.0, and a fixed evaluation set. Default seeds are 42 for training and 2026/2027 (Track 1) / 3030 (Track 2) for evaluation batches.
 
 ```python
-import torch
-from tricore import TriCoreLM, BaselineTransformerLM, generate_associative_recall_batch
+from tricore import (
+    TriCoreBlock, TriCoreLM, BaselineTransformerLM,
+    generate_associative_recall_batch, generate_contextual_code_lm_batch,
+)
 
-model = TriCoreLM(
-    vocab_size=64, d_model=128, n_layers=2, d_fast=32, max_loops=2,
-    enable_fast_weight=True, enable_adaptive_loop=True,
+x, y = generate_associative_recall_batch(batch_size=4, device="cpu")
+model = TriCoreLM(vocab_size=64, d_model=128, n_layers=1, d_fast=32, max_loops=2)
+logits, surprise = model(x)          # [4, 60, 64], [4, 60]
+
+code_x, code_y, deref_mask = generate_contextual_code_lm_batch(
+    batch_size=4, num_vars=6, num_noise=6, device="cpu"
 )
-x, y = generate_associative_recall_batch(batch_size=4, num_kv_pairs=8, num_queries=4)
-logits, surprise = model(x)          # [B, L, 64], [B, L]
-loss = torch.nn.functional.cross_entropy(
-    logits.view(-1, 64), y.view(-1), ignore_index=-100
-)
-loss.backward()
+code_logits, code_surprise = model(code_x)  # [4, 82, 64], [4, 82]
 ```
-
-`enable_fast_weight=False` and `enable_adaptive_loop=False` are the two ablation switches. They gate compute, not parameter registration; all TriCore variants therefore report the same trainable parameter count.
 
 ---
 
 ## 5. Benchmark
 
-### 5.1 MQAR accuracy and ablation
+All numbers below are generated by `python run_experiment.py` on the reference machine and copied from `results/BENCHMARK_REPORT.md`. They are single-seed results.
 
-Task: Multi-Query Associative Recall with 8 key-value pairs, 4 queries, and 16 distractor tokens (40-token training sequences). The extrapolation column uses a **4× longer distractor gap** (64 noise tokens; 88-token sequences), not 4× total sequence length.
+### 5.1 JIT timing versus V4
 
-| Architecture variant | Parameters | Final val loss | In-domain recall | 4× noise-gap extrapolation | Train time |
+| Measurement | Time | Note |
+| :--- | :---: | :--- |
+| V4 Full, Python per-token loop | 136.0 s | reference run |
+| V5 Full, TorchScript fused scan | 125.3 s | timed 500 steps |
+| V5 / V4 speed ratio | **1.08x** | >1 means faster; <1 means slower |
+| V5 first-call warm-up | 0.5 s | excluded from timed training |
+
+Timed training includes data generation, forward, backward, and optimizer steps. Warm-up is excluded. The ratio is a single-seed wall-clock measurement on one machine, not a throughput guarantee.
+
+### 5.2 Track 1: 2-Hop Chained Associative Recall
+
+500 steps, batch 64, `lr=3e-3`, seed 42; 6 chains, 4 queries, 16 training noise tokens. Fixed evaluation batches use seeds 2026/2027. The 4x extrapolation multiplies the distractor gap from 16 to 64 tokens, not the total sequence length.
+
+| Architecture variant | Parameters | Final val loss | In-domain 2-hop recall | 4x noise-gap extrapolation | Train time |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **TriCore Full (3-in-1)** | 348,432 | **0.0012** | **100.00%** | **99.45%** | 129.5 s |
-| TriCore No Fast-Weight | 348,432 | 3.4330 | 3.28% | 3.83% | 60.6 s |
-| TriCore No Adaptive Loop | 348,432 | **0.0012** | **100.00%** | **99.84%** | 126.0 s |
-| Vanilla Transformer | 543,744 | 2.8272 | 13.12% | 13.05% | 16.4 s |
+| **TriCore Full (3-in-1)** | 207,503 | **0.0010** | **100.00%** | **100.00%** | 125.3 s |
+| TriCore No Engine I: Surprise Gate | 207,503 | 0.4066 | 91.88% | 84.14% | 97.9 s |
+| TriCore No Engine II: Fast-Weight | 207,503 | 3.0008 | 5.78% | 4.14% | 29.2 s |
+| TriCore No Engine III: Adaptive Loop | 207,503 | 1.8660 | 16.48% | 16.56% | 59.7 s |
+| Vanilla Transformer (2-layer) | 543,744 | 2.3131 | 16.72% | 15.23% | 15.9 s |
 
-**Reading the table honestly.**
+### 5.3 Track 1 reading
 
-- **Fast weights are the decisive engine.** Removing them drops in-domain recall from 100.00% to 3.28% and extrapolation from 99.45% to 3.83%, while validation loss rises from 0.0012 to 3.4330. The task is solved by causal associative binding, not by the recurrent state alone.
-- **Engine III is not responsible for this result.** Full and No-Adaptive-Loop both reach 100.00% in-domain and 0.0012 loss. Their extrapolation difference (99.45% vs 99.84%) is a single-seed fluctuation, not evidence that removing the loop helps. Engine III costs about 3.5 s (2.7%) in this run and has no measurable accuracy benefit on MQAR. It remains an independently ablatable research component, not a claimed accuracy driver.
-- **The Transformer baseline is not a tuned ceiling.** It uses the same 600-step budget, but no learning-rate or architecture search. Its 13.12% / 13.05% result should be read as “this small, short-budget baseline did not solve MQAR,” not as a general statement about attention.
-- **Parameter counts are not matched.** The Transformer's 543,744 parameters include a 262,144-parameter learned positional embedding (`2048 × 128`); without it, the baseline has 281,600 parameters, fewer than TriCore's 348,432. TriCore has no positional embedding table.
-- **TriCore is slower in wall-clock time here.** Its recurrence is a Python per-token loop (129.5 s vs 16.4 s). The current value proposition is constant-size state, not throughput.
+1. **Full TriCore solves the task.** It reaches `100.00%` in-domain and `100.00%` at the 4x gap; validation loss is `0.0010`.
+2. **Engine II is the associative memory.** Without fast weights, recall is `5.78% / 4.14%`, below the 6-way chance level of `16.67%`.
+3. **Engine III is the second hop.** Without the latent re-query, recall is `16.48% / 16.56%`, essentially chance.
+4. **Engine I contributes but is not the whole story at this seed.** Removing the write gate gives `91.88% / 84.14%`, a drop of `8.12 / 15.86` points from Full, but not the collapse seen in the V4 record. The result is seed- and protocol-sensitive; the V4 report's `63.44% / 51.41%` is not reproduced.
+5. **The Transformer is at chance.** `16.72% / 15.23%` at this budget; it is not tuned, parameter-matched, or compute-matched. This is not evidence of an attention ceiling.
+6. **JIT helps modestly.** Full is `125.3 s` versus `136.0 s` for the V4 Python loop, a `1.08x` speedup. The Transformer is still much faster (`15.9 s`) because TriCore executes a sequential recurrence and many small matrix products.
 
-### 5.2 Inference cache scaling
+### 5.4 Track 2: Contextual Code LM
 
-The report uses per-sample FP32 state accounting. For TriCore with `D = 128`, `H = 4`, `d_head = 32`, and 2 layers:
+300 steps, batch 32, `lr=3e-3`, seed 42; 6 variables, 6 NOP statements, sequence length 82. Dense next-token cross-entropy; dereference accuracy is measured only at the return-alias position. Fixed evaluation batches use seed 3030.
 
-```math
-C_{\text{TriCore}} =
-n_{\text{layers}}\left(D + H d_{\text{head}}^2\right) \times 4\text{ bytes}
-= 2\left(128 + 4 \cdot 32^2\right) \times 4
-= 33{,}792\text{ bytes} \approx 33.0\text{ KiB}.
+| Model | Parameters | Validation loss | Validation PPL | Dereference accuracy | Train time |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **TriCore Full (1-layer)** | 207,503 | 0.5914 | **1.81** | **21.09%** | 83.4 s |
+| Vanilla Transformer (2-layer) | 543,744 | 0.6753 | 1.96 | 18.75% | 2.9 s |
+
+The task is a synthetic imperative grammar. Each sample contains, in random statement order:
+
+```text
+[LET,   var_i,   EQ, lit_i,  SEMI]
+[ALIAS, alias_i, EQ, var_i,  SEMI]
+[NOP,   NOISE,   SEMI]
+...
+[RET,   alias_i, lit_i,  SEMI]
 ```
 
-The Transformer KV cache is
+Variable, alias, and literal namespaces are disjoint. The return uses an alias, so predicting `lit_i` at the alias position requires resolving `alias_i -> var_i -> lit_i` rather than copying a surface token. There are 6 equally likely literals, so chance is `16.67%`.
 
-```math
-C_{\text{KV}}(L) = n_{\text{layers}} \cdot 2 \cdot L \cdot D \cdot 4\text{ bytes}.
-```
+**Reading.** TriCore has a small edge on both PPL and dereference accuracy, but `21.09%` is only `4.42` points above chance and the run is single-seed. This track validates the pipeline and shows a non-degenerate signal; it does **not** establish general code understanding, compositional generalization, or a Transformer-beating result. The Transformer is also near chance. A longer schedule, more variables, or real code would be a different experiment.
+
+### 5.5 Cache scaling
+
+Per sample, FP32, `D=128`, `H=4`, `d_head=32`, Transformer `n_layers=2`.
 
 | Sequence length | Transformer KV cache | TriCore O(1) state | Reduction |
 | :---: | :---: | :---: | :---: |
-| 128 | 256.00 KB | 33.00 KB | **7.8× smaller** |
-| 512 | 1,024.00 KB | 33.00 KB | **31.0× smaller** |
-| 2,048 | 4,096.00 KB | 33.00 KB | **124.1× smaller** |
-| 8,192 | 16,384.00 KB | 33.00 KB | **496.5× smaller** |
-| 32,768 | 65,536.00 KB | 33.00 KB | **1,985.9× smaller** |
+| 128 | 256.00 KB | 17.00 KB | 15.1x |
+| 512 | 1,024.00 KB | 17.00 KB | 60.2x |
+| 2,048 | 4,096.00 KB | 17.00 KB | 240.9x |
+| 8,192 | 16,384.00 KB | 17.00 KB | 963.8x |
+| 32,768 | 65,536.00 KB | 17.00 KB | **3,855.1x** |
 
-**Accounting note.** The benchmark formula counts `h` and `F`. The implementation also carries `prev_k` (`H · d_head = 128` floats per layer, 1 KiB total for two layers), so the strict persistent state footprint is about **34 KiB**. It remains constant in `L`. The table and plot use the report's 33.00 KB convention so that the figure and the generated markdown agree.
-
-The O(1) claim is about **state size**, not total memory. Activations during training, framework allocator overhead, and temporary tensors are not included.
-
-### 5.3 Plot
-
-![TriCore V3 versus Vanilla Transformer: validation loss, recall accuracy, and cache scaling](results/tricore_vs_transformer.png)
-
-The left and middle panels show validation loss and recall over 600 steps. The right panel is the log-log cache comparison: the Transformer KV cache grows linearly with `L`, while TriCore's state stays flat.
+`C_TriCore = (D + H*d_head^2 + H*d_head) * 4 / 1024` KiB includes `h`, `F_mat`, and `prev_k` and is independent of `L`. The Transformer figure is `n_layers * 2 * L * D * 4 / 1024` KiB. This is an inference-state accounting comparison, not a measured decode benchmark.
 
 ---
 
@@ -308,133 +333,174 @@ The left and middle panels show validation loss and recall over 600 steps. The r
 ```text
 tricore-arch/
 ├── tricore/
-│   ├── __init__.py          # Public exports
-│   ├── model.py             # TriCoreBlock, TriCoreLM, BaselineTransformerLM
-│   └── tasks.py             # MQAR / associative-recall generator
+│   ├── __init__.py          # TriCoreBlock, TriCoreLM, BaselineTransformerLM,
+│   │                        # both task generators
+│   ├── model.py             # tricore_fused_scan, TriCoreBlock, TriCoreLM, baseline
+│   └── tasks.py             # 2-Hop MQAR + Contextual Code LM generators
 ├── tests/
-│   └── test_sanity.py       # Forward, backward, shape, and gradient-flow check
+│   ├── test_sanity.py       # forward/backward/shape/gradient-flow
+│   └── test_v5.py           # JIT-vs-Python equivalence + code-task backward
 ├── results/
-│   ├── BENCHMARK_REPORT.md
+│   ├── BENCHMARK_REPORT.md  # generated by run_experiment.py
 │   └── tricore_vs_transformer.png
-├── run_experiment.py        # Four-way training, ablation, and cache profiler
-├── requirements.txt
-├── SPEC.md                  # Archived V1 blueprint (superseded by SPEC_V2.md)
-├── SPEC_V2.md               # V3 architecture contract and benchmark record
+├── run_experiment.py        # dual-track training, ablation, cache, report, plot
+├── requirements.txt         # torch, numpy, matplotlib
+├── pyproject.toml           # installable tricore-arch 0.5.0, MIT
+├── LICENSE                  # MIT
+├── .gitignore               # Python/cache/venv; keeps report and PNGs
+├── SPEC_V2.md               # V5 architecture + contracts
 └── README.md
 ```
 
-The reference notebook-free implementation is intentionally small: `tricore/model.py` is the executable source of truth. `run_experiment.py` regenerates both result artifacts from scratch.
+### 6.1 Installable package
+
+`pyproject.toml` declares `tricore-arch==0.5.0`, Python `>=3.10`, and the runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`. The package name remains `tricore-arch`; the import package is `tricore`.
+
+```bash
+python -m pip install -e .
+python -c "import tricore; print(tricore.__file__)"
+```
+
+### 6.2 Generated artifacts
+
+`results/BENCHMARK_REPORT.md` is the machine-generated source of truth for the latest numbers; this README and `SPEC_V2.md` summarize it. The plot is a 2x2 panel. Do not hand-edit the generated report and then claim it came from a run; rerun the script.
 
 ---
 
 ## 7. Experimental protocol
 
-All four variants are trained from scratch with the same budget and seed. There is no per-variant hyperparameter search.
+### 7.1 Track 1 — 2-Hop Chained Associative Recall
 
-| Item | Value |
-| :--- | :--- |
-| Task | MQAR with 8 key-value pairs, 4 queries, 16 distractor tokens |
-| Training sequence length | 40 tokens |
-| Vocabulary | 64 tokens (keys, values, and one noise token) |
-| Loss | Cross-entropy at query positions only (predict the value token that follows; `ignore_index=-100` elsewhere) |
-| Steps / batch | 600 / 64 |
-| Optimizer | AdamW, `lr=3e-3`, `weight_decay=1e-2` |
-| Schedule | Cosine annealing over 600 steps |
-| Gradient clipping | Global norm 1.0 |
-| Seed | 42 for every variant |
-| TriCore size | `d_model=128`, `n_layers=2`, `H=4`, `d_head=32`, `max_loops=2` |
-| Transformer baseline | 2 layers, 4 heads, `d_model=128`, FFN 256, GELU, pre-norm, causal mask, learned positional embeddings (`max_seq_len=2048`) |
-| In-domain evaluation | 5 batches of 32, `noise_len=16` |
-| Extrapolation evaluation | 10 batches of 32, `noise_len=64` (4× noise gap) |
-| Device | CUDA if available; CPU fallback |
-| Reference environment | Python 3.13.5, PyTorch 2.7.1+cu118, NumPy 1.26.4, Matplotlib 3.10.9 |
+- 6 chains, 4 queries, 16 training noise tokens; sequence length `6*3 + 6*3 + 16 + 4*2 = 60`.
+- 500 optimizer steps, batch 64, AdamW, `lr=3e-3`, weight decay `0.01`, cosine decay, gradient clipping `1.0`.
+- Training seed `42`; fixed evaluation batches are generated with seeds `2026` (in-domain) and `2027` (4x gap), 10 batches of 32 per evaluation.
+- The 4x evaluation multiplies the distractor gap from `16` to `64` tokens; the total sequence length becomes `108`, not `240`.
+- Recall is computed only at query positions whose target is not `-100`.
+- Full, No Engine I, No Engine II, No Engine III, and a 2-layer Transformer are trained from scratch with the same protocol.
 
-The data generator constructs each batch on CPU and transfers it to the accelerator once per batch. This avoids thousands of per-element CUDA assignments; the generated token/target semantics are unchanged.
+### 7.2 Track 2 — Contextual Code LM
 
-**Reproducibility boundary.** This is one seed and one 600-step budget. The full and no-adaptive runs both show a sharp transition between step 50 and step 100, consistent with a grokking-like phase change, but a single run cannot establish its stability. The next step is multi-seed reporting with mean and standard deviation.
+- 6 variables, 6 NOP statements; sequence length `6*(2*5) + 6*3 + 4 = 82`.
+- 300 optimizer steps, batch 32, AdamW, `lr=3e-3`, weight decay `0.01`, cosine decay, gradient clipping `1.0`.
+- Training seed `42`; fixed evaluation batches use seed `3030`, 8 batches of 32.
+- Dense next-token cross-entropy over all non-`-100` positions.
+- Dereference accuracy is measured at the single return-alias position, where the target is one of 6 literals (`16.67%` chance).
+- TriCore uses one layer (`d_model=128`, `d_fast=32`, `max_loops=2`); the baseline uses two Transformer layers.
+
+### 7.3 Timing
+
+- V5 timing includes data generation, forward, backward, and optimizer steps for 500 Full steps.
+- The first scripted call is a warm-up and is excluded; the reported warm-up is 0.5 s.
+- V4's 136.0 s is the previously recorded Python-loop Full run, not a simultaneous measurement.
+- Timings are single-machine wall-clock values and vary with GPU, driver, PyTorch version, and thermal state.
+
+### 7.4 What is not controlled
+
+No multi-seed confidence interval, no hyperparameter search for the Transformer, no parameter- or FLOP-matching, no real held-out corpus, and no decode-latency benchmark. The Track 2 task is synthetic and small. Treat the numbers as an existence demonstration and a pipeline check.
 
 ---
 
 ## 8. Verification
 
-The sanity test instantiates a small TriCore model, runs a forward pass, checks logits and surprise shapes, computes cross-entropy, and backpropagates through every parameter tensor:
+### 8.1 JIT equivalence
 
-```text
-[PASS] Sanity check succeeded on cuda. Loss: 4.1582, Checked 50 parameter tensors.
-```
+`tests/test_v5.py` builds random tensors for `h`, `F`, `prev_k`, projections, and hop parameters, then runs `tricore_fused_scan` and an explicit Python reference over five flag combinations:
 
-The exact loss varies because the sanity test does not fix a seed. All Python files compile:
+- all three engines enabled
+- No Engine I
+- No Engine II
+- No Engine III
+- all engines disabled
 
-```text
-COMPILE_OK
-```
+All three outputs (`h_seq`, `mem_seq`, `surprise_trace`) must satisfy `torch.allclose(..., atol=1e-6, rtol=1e-5)`. The test also checks the code-task shapes, the dereference mask, and a backward pass with finite gradients.
 
-Reproduce with:
+Run:
 
 ```bash
-python tests/test_sanity.py
-python -m py_compile tricore/model.py tricore/tasks.py tricore/__init__.py tests/test_sanity.py run_experiment.py
+python -m pytest -q
+python tests/test_v5.py
 ```
 
-The sanity check validates gradient flow, not convergence. Convergence evidence is the benchmark table above.
+### 8.2 Full run
+
+The reference run completed on CUDA and regenerated:
+
+- `results/BENCHMARK_REPORT.md`
+- `results/tricore_vs_transformer.png`
+
+The report contains the JIT timing, the five-way Track 1 table, the Track 2 table, and the cache table. If the code and this README disagree, `results/BENCHMARK_REPORT.md` and the code win.
+
+### 8.3 Smoke run
+
+```bash
+python run_experiment.py --steps 2 --code-steps 2
+```
+
+This is a pipeline check, not a result. It compiles the scripted scan, runs both task generators, exercises all five Track 1 variants and both Track 2 models, writes the report, and saves the plot.
 
 ---
 
 ## 9. Limitations
 
-TriCore V3 is a research reference. The following caveats are part of the result, not footnotes to hide:
-
-- **Synthetic task only.** MQAR measures associative recall under controlled noise. It is not natural-language modeling, reasoning, or instruction following.
-- **Single seed, single budget.** All numbers come from seed 42 and 600 steps. No confidence intervals, no multi-seed mean ± std, and no convergence study. The 100.00% result should not be treated as a stable population estimate.
-- **The extrapolation is a 4× noise gap, not 4× total length.** Training sequences are 40 tokens; extrapolation sequences are 88 tokens with a 64-token distractor gap. This tests memory persistence across distractors, not 32K-token streaming.
-- **The Transformer baseline is small and untuned.** It uses the same step budget but no architecture or learning-rate search. Its low score is evidence about this baseline, not a general ceiling for attention.
-- **Parameter and compute counts are not matched.** The Transformer has more total parameters because of its positional embedding table, but fewer non-position parameters. TriCore is also much slower in wall-clock time in this Python implementation.
-- **Engine III has no measurable benefit here.** Full and No-Adaptive-Loop are indistinguishable on in-domain accuracy and loss; the small extrapolation difference is single-seed noise. Do not cite Engine III as the source of the MQAR result.
-- **The O(1) cache is an inference state-size claim.** It excludes training activations (which are O(L) for backprop), allocator overhead, temporary tensors, and the `prev_k` term in the headline 33 KB figure. The strict persistent inference state is about 34 KiB.
-- **No kernel optimization.** The per-token Python loop is intentionally transparent. It is not a throughput-optimized implementation, and the wall-clock comparison is not hardware-optimal for TriCore.
-- **No scale claim.** These experiments do not establish parity with a fully trained Transformer at language-model scale. They validate an operator, its gradients, its ablation behavior, and its cache scaling.
+- **Single seed.** Every number is one run. No confidence intervals, no seed variance, no significance test. The V5 No-Engine-I result (`91.88% / 84.14%`) differs substantially from the V4 record (`63.44% / 51.41%`); the equations are the same, but optimization and fixed evaluation batches differ.
+- **Synthetic tasks only.** Track 1 is a controlled associative-recall construction. Track 2 is a tiny imperative grammar with disjoint namespaces. Neither is natural language or real code.
+- **Near-chance Track 2.** `21.09%` dereference is only `4.42` points above chance. PPL is lower than the baseline, but the task and budget are small. Do not describe this as code understanding.
+- **JIT is not a kernel.** The speed ratio is `1.08x` on one machine. TorchScript removes Python dispatch but still launches many small CUDA kernels; a custom fused/chunked kernel is future work.
+- **Transformer baseline is untuned.** It is not parameter-matched (`543,744` vs `207,503`), not compute-matched, and not tuned. Its chance-level Track 1 result is not an attention ceiling.
+- **No long-context decode measurement.** The 3,855.1x cache reduction at 32K is arithmetic from state shapes, not a measured serving benchmark.
+- **No 3-5 hop or natural-language evidence.** The router and memory are only tested on 2-hop synthetic chains and the 82-token code grammar.
+- **Task-specific ablations.** Engine III was redundant on the V3 single-hop task and is necessary here; Engine I's necessity depends on the noise pattern and seed. Conclusions are conditional.
+- **No production hardening.** No checkpoint format, distributed training, mixed precision, quantization, serving API, or security review.
 
 ---
 
 ## 10. Roadmap
 
-The current benchmark is deliberately a starting point. The highest-value next steps are:
+1. **Multi-seed evidence.** At least three seeds with mean ± std for loss, recall, extrapolation, and wall-clock time.
+2. **More hops.** 3-5 hop chains, more bridge tokens, and variable `max_loops`; measure whether the router uses or downweights extra re-queries.
+3. **Stronger adversarial writes.** Deletion, overwrite, repeated distractors, and higher noise density.
+4. **Long-context streaming.** Measure decode latency and memory at 32K-128K tokens against a real KV-cache implementation.
+5. **Kernel-level efficiency.** Replace the scripted loop with a fused/chunked scan or a compiled CUDA/Triton kernel; compare against the V5 JIT baseline.
+6. **Matched baselines.** Tune the Transformer and match non-position parameters, tokens, and compute.
+7. **Harder code task.** More variables, longer schedules, held-out program templates, and a real code corpus.
+8. **Natural-language pretraining.** Test whether surprise-gated writes and latent re-query transfer beyond synthetic tasks.
 
-1. **Multi-seed evidence.** Run at least three seeds and report mean ± std for loss, recall, extrapolation, and wall-clock time. The present single-seed 100.00% should be treated as an existence result.
-2. **Harder associative tasks.** Increase the number of key-value pairs, query count, vocabulary, and distractor length; test whether Engine III becomes useful when one delta-rule write is insufficient.
-3. **Long-context streaming evaluation.** Measure decode latency and memory at 32K–128K tokens, where the O(1) state is expected to matter most, and compare against a real KV-cache implementation rather than a formula.
-4. **Kernel-level efficiency.** Replace the Python per-token loop with a fused/chunked scan or a compiled kernel. The present wall-clock comparison is not hardware-optimal for TriCore.
-5. **Matched baselines.** Tune the Transformer baseline and match non-position parameters, training tokens, and compute. A fair comparison needs more than an identical step count.
-6. **Natural-language pretraining.** Test whether causal shifted fast weights and surprise-gated state collapse provide any transfer advantage beyond synthetic associative recall.
+---
 
 ## 11. Citation
 
-If you use TriCore in your research, please cite the architecture specification:
-
 ```bibtex
-@misc{tricore2026,
-  title        = {TriCore: Surprise-Gated State Collapse, Causal Shifted Fast-Weight
-                  Plasticity, and Surprise-Scaled Equilibrium Refinement},
+@misc{tricore2026v5,
+  title        = {TriCore V5: JIT-Fused Surprise-Gated Write Protection,
+                  Causal Fast Weights, and Latent Multi-Hop Synaptic Chaining},
   author       = {The TriCore Authors},
   year         = {2026},
-  howpublished = {\url{https://github.com/tricore-arch/tricore}},
-  note         = {Open-source reference implementation, V3}
+  howpublished = {Open-source reference implementation},
+  note         = {Version 5; MIT license; single-seed synthetic benchmarks}
 }
 ```
 
+---
+
 ## 12. Contributing
 
-Issues and pull requests are welcome. Please preserve the following invariants:
+Issues and pull requests are welcome. Preserve these invariants:
 
-1. `TriCoreBlock` must remain attention-free and must keep an inference state whose shape is independent of sequence length.
-2. The causal shift in Engine II must remain: the write binds `K_{t-1}` to `V_t`, and the read uses `Q_t` after the write.
-3. Every engine must remain independently ablatable through `enable_fast_weight` and `enable_adaptive_loop`.
-4. Numerical changes to the equations require a gradient-stability test and a regenerated benchmark report.
-5. Benchmark claims must be reproducible with `python run_experiment.py`, and must state the seed, budget, task, and parameter counts.
-6. Do not describe Engine III as dynamic depth. It is a fixed `L_max` loop; surprise scales the step size.
+1. **No attention over tokens.** No softmax may mix sequence positions. The only softmax is the hop router over `max_loops + 1` slots.
+2. **O(1) state.** `h`, `F_mat`, and `prev_k` shapes must be independent of `L`.
+3. **Causal shifted write.** Engine II binds `K_{t-1}` to `V_t`; the read uses `Q_t` after the write.
+4. **Delta rule.** The write is `(V_t - F_{t-1}K_{t-1})K_{t-1}^T`, not a plain Hebbian outer product.
+5. **Per-head matrices.** `F_mat` is `[B, H, d_head, d_head]`.
+6. **Canonical address.** Q/K/V retain the shared normalized address plus residual projections.
+7. **Write protection.** Engine I retains a learned write gate; `enable_surprise_gate=False` is the unconditional-delta ablation.
+8. **Latent re-query.** Engine III maps the previous read back into query space and re-queries the same `F_mat`; disabling it removes the loop and the refinement MLP.
+9. **Independent ablations.** Flags gate compute without changing parameter registration.
+10. **JIT equivalence.** Any change to `tricore_fused_scan` must pass `tests/test_v5.py` against the Python reference.
+11. **Fixed loop count.** Do not describe Engine III as adaptive computation time; `max_loops` is a constant.
+12. **Reproducible artifacts.** `python run_experiment.py` must regenerate the report and plot, and state accounting must include `prev_k`.
 
 ---
 
 <p align="center">
-  <i>TriCore V3 — remember in constant state, write what surprises you.</i>
+  <i>TriCore V5 — keep a constant state, protect what matters, compile the loop, and chase the latent pointer twice.</i>
 </p>

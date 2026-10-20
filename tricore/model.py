@@ -1,15 +1,111 @@
-import math
+from typing import Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
+@torch.jit.script
+def tricore_fused_scan(
+    u_feat: torch.Tensor,
+    u_surp_bias: torch.Tensor,
+    w_gate_logits: torch.Tensor,
+    hop_weights: torch.Tensor,
+    Q: torch.Tensor,
+    K: torch.Tensor,
+    V: torch.Tensor,
+    base_decay: torch.Tensor,
+    fast_decay: torch.Tensor,
+    fast_lr: torch.Tensor,
+    hop_proj: torch.Tensor,
+    enable_surprise_gate: bool,
+    enable_fast_weight: bool,
+    enable_adaptive_loop: bool,
+    max_loops: int,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    TorchScript JIT-compiled fused recurrent scan over sequence length L.
+    Eliminates Python loop overhead while preserving exact O(1) state dynamics.
+    """
+    B, L, D = u_feat.shape
+    H = Q.shape[2]
+    Dh = Q.shape[3]
+
+    h = torch.zeros(B, D, device=u_feat.device, dtype=u_feat.dtype)
+    F_mat = torch.zeros(B, H, Dh, Dh, device=u_feat.device, dtype=u_feat.dtype)
+    prev_k = torch.zeros(B, H, Dh, 1, device=u_feat.device, dtype=u_feat.dtype)
+
+    h_list = torch.jit.annotate(list[torch.Tensor], [])
+    mem_list = torch.jit.annotate(list[torch.Tensor], [])
+    surprise_list = torch.jit.annotate(list[torch.Tensor], [])
+
+    for t in range(L):
+        u_t = u_feat[:, t, :]
+
+        # 1. Engine I: Surprise-Gated State Collapse & Write Protection
+        pred_error = torch.abs(u_t - h)
+        if enable_surprise_gate:
+            g_t = torch.sigmoid(u_surp_bias[:, t, :] + pred_error)
+            surprise_scalar = g_t.mean(dim=-1, keepdim=True)
+            write_gate = torch.sigmoid(w_gate_logits[:, t] + surprise_scalar.view(B, 1, 1, 1) - 0.5)
+            eff_lr = fast_lr * write_gate
+            eff_decay = fast_decay
+        else:
+            g_t = torch.full_like(u_t, 0.5)
+            surprise_scalar = g_t.mean(dim=-1, keepdim=True)
+            eff_lr = torch.ones_like(fast_lr)
+            eff_decay = torch.ones_like(fast_decay)
+
+        h = base_decay * (1.0 - 0.5 * g_t) * h + g_t * u_t
+        h_list.append(h)
+        surprise_list.append(surprise_scalar)
+
+        # 2. Engine II: Causal Shifted Fast-Weight Plasticity (K_{t-1} -> V_t)
+        if enable_fast_weight:
+            k_t = K[:, t].unsqueeze(-1)
+            v_t = V[:, t].unsqueeze(-1)
+            q_t = Q[:, t].unsqueeze(-1)
+
+            if t > 0:
+                v_pred = torch.matmul(F_mat, prev_k)
+                synapse_err = v_t - v_pred
+                F_mat = eff_decay * F_mat + torch.matmul(eff_lr * synapse_err, prev_k.transpose(-1, -2))
+
+            # Hop 1 Associative Read
+            r_hop = torch.matmul(F_mat, q_t)
+
+            # 3. Engine III: Multi-Hop Synaptic Equilibrium Loop
+            if enable_adaptive_loop:
+                w_t = hop_weights[:, t]
+                r_accum = w_t[:, 0].view(B, 1, 1, 1) * r_hop
+                r_curr = r_hop
+                for step in range(max_loops):
+                    q_next = F.normalize(
+                        r_curr + torch.matmul(hop_proj[step], r_curr),
+                        p=2.0,
+                        dim=-2,
+                    )
+                    r_curr = torch.matmul(F_mat, q_next)
+                    r_accum = r_accum + w_t[:, step + 1].view(B, 1, 1, 1) * r_curr
+                recalled = r_accum.squeeze(-1).reshape(B, H * Dh)
+            else:
+                recalled = r_hop.squeeze(-1).reshape(B, H * Dh)
+
+            mem_list.append(recalled)
+            prev_k = k_t
+
+    h_seq = torch.stack(h_list, dim=1)
+    surprise_trace = torch.cat(surprise_list, dim=1)
+    if enable_fast_weight:
+        mem_seq = torch.stack(mem_list, dim=1)
+    else:
+        mem_seq = torch.zeros(B, L, H * Dh, device=u_feat.device, dtype=u_feat.dtype)
+
+    return h_seq, mem_seq, surprise_trace
+
+
 class TriCoreBlock(nn.Module):
     """
-    TriCore V3: High-Speed Unified Operator with Causal Shifted Fast-Weight Binding
-      1. Engine I: Surprise-Gated State Collapse (Vectorized pre-projection + O(1) recurrent state)
-      2. Engine II: Multi-Head Forward Fast-Weight Plasticity (Causal K_{t-1} -> V_t Delta Rule + Current Step Recall)
-      3. Engine III: Surprise-Driven Adaptive Equilibrium Loop (Vectorized post-memory refinement)
+    TriCore V5: JIT-Fused Unified Operator with Subspace-Aligned Multi-Hop Synaptic Chaining
     """
     def __init__(self, d_model: int = 128, n_heads: int = 4, d_head: int = 32, max_loops: int = 2):
         super().__init__()
@@ -17,34 +113,30 @@ class TriCoreBlock(nn.Module):
         self.n_heads = n_heads
         self.d_head = d_head
         self.max_loops = max_loops
+        total_fast_dim = n_heads * d_head
 
         self.in_norm = nn.LayerNorm(d_model)
 
-        # Causal 1D Short Convolution for local temporal context
-        self.short_conv = nn.Conv1d(
-            in_channels=d_model,
-            out_channels=d_model,
-            kernel_size=3,
-            padding=2,
-            groups=d_model,
-        )
-
-        # --- Engine I: Surprise-Gated State Collapse ---
+        # --- Engine I: Surprise-Gated State Collapse & Write Protection ---
         self.u_proj = nn.Linear(d_model, d_model)
-        self.surprise_gate = nn.Linear(d_model, d_model)
+        self.surprise_u_proj = nn.Linear(d_model, d_model)
+        self.write_gate_proj = nn.Linear(d_model, n_heads)
         self.base_decay_logit = nn.Parameter(torch.linspace(1.0, 3.0, d_model))
 
-        # --- Engine II: Multi-Head Causal Fast-Weight Plasticity ---
-        total_fast_dim = n_heads * d_head
-        self.proj_q = nn.Linear(d_model, total_fast_dim, bias=False)
-        self.proj_k = nn.Linear(d_model, total_fast_dim, bias=False)
-        self.proj_v = nn.Linear(d_model, total_fast_dim, bias=False)
+        # --- Engine II: Subspace-Aligned Multi-Head Fast-Weight Plasticity ---
+        self.proj_addr = nn.Linear(d_model, total_fast_dim, bias=False)
+        self.proj_q_res = nn.Linear(d_model, total_fast_dim, bias=False)
+        self.proj_k_res = nn.Linear(d_model, total_fast_dim, bias=False)
+        self.proj_v_res = nn.Linear(d_model, total_fast_dim, bias=False)
         self.proj_out = nn.Linear(total_fast_dim, d_model, bias=False)
 
-        self.fast_lr_logit = nn.Parameter(torch.ones(1, n_heads, 1, 1) * 0.5)
-        self.fast_decay_logit = nn.Parameter(torch.ones(1, n_heads, 1, 1) * 3.5)
+        self.fast_lr_logit = nn.Parameter(torch.ones(1, n_heads, 1, 1) * 2.2)
+        self.fast_decay_logit = nn.Parameter(torch.ones(1, n_heads, 1, 1) * 4.5)
 
-        # --- Engine III: Adaptive Nonlinear Equilibrium Loop ---
+        # --- Engine III: Multi-Hop Synaptic Equilibrium Loop ---
+        self.hop_proj = nn.Parameter(torch.randn(max_loops, 1, n_heads, d_head, d_head) * 0.02)
+        self.hop_router = nn.Linear(d_model, max_loops + 1)
+
         self.think_norm = nn.LayerNorm(d_model)
         self.think_mlp = nn.Sequential(
             nn.Linear(d_model, d_model * 2),
@@ -56,88 +148,56 @@ class TriCoreBlock(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
+        enable_surprise_gate: bool = True,
         enable_fast_weight: bool = True,
         enable_adaptive_loop: bool = True,
     ):
         B, L, D = x.shape
         H, Dh = self.n_heads, self.d_head
-        device = x.device
 
         residual = x
         u = self.in_norm(x)
 
-        # Pre-compute local conv features in parallel
-        u_conv = self.short_conv(u.transpose(1, 2))[..., :L].transpose(1, 2)
-        u_conv = F.silu(u_conv)
-        u_feat = self.u_proj(u_conv)
+        u_feat = F.silu(self.u_proj(u))
+        u_surp_bias = self.surprise_u_proj(u)
+        w_gate_logits = self.write_gate_proj(u).view(B, L, H, 1, 1)
+        hop_weights = F.softmax(self.hop_router(u), dim=-1)
 
-        # Multi-head Q, K, V projections computed in parallel across sequence L
-        # Q and K use sharp L2 normalization along head dim so dot-product retrieval is exact
-        Q = F.normalize(self.proj_q(u).view(B, L, H, Dh), p=2, dim=-1)
-        K = F.normalize(self.proj_k(u).view(B, L, H, Dh), p=2, dim=-1)
-        V = self.proj_v(u_conv).view(B, L, H, Dh)
+        addr = F.normalize(self.proj_addr(u).view(B, L, H, Dh), p=2.0, dim=-1)
+        Q = F.normalize(addr + 0.15 * self.proj_q_res(u).view(B, L, H, Dh), p=2.0, dim=-1)
+        K = F.normalize(addr + 0.15 * self.proj_k_res(u).view(B, L, H, Dh), p=2.0, dim=-1)
+        V = addr + 0.15 * self.proj_v_res(u).view(B, L, H, Dh)
 
-        base_decay = torch.sigmoid(self.base_decay_logit)               # [D]
-        fast_decay = torch.sigmoid(self.fast_decay_logit)               # [1, H, 1, 1]
-        fast_lr = torch.sigmoid(self.fast_lr_logit) * 0.9               # [1, H, 1, 1]
+        base_decay = torch.sigmoid(self.base_decay_logit)
+        fast_decay = torch.sigmoid(self.fast_decay_logit)
+        fast_lr = torch.sigmoid(self.fast_lr_logit)
 
-        # Persistent O(1) states
-        h = torch.zeros(B, D, device=device, dtype=x.dtype)
-        # Multi-head fast weight matrix F_mat: [B, H, Dh, Dh]
-        F_mat = torch.zeros(B, H, Dh, Dh, device=device, dtype=x.dtype)
-        prev_k = torch.zeros(B, H, Dh, 1, device=device, dtype=x.dtype)
-
-        h_list = []
-        mem_list = []
-        surprise_list = []
-
-        for t in range(L):
-            u_t = u_feat[:, t, :]  # [B, D]
-
-            # 1. Engine I: Surprise-Gated State Collapse (Prediction Error against compressed state h)
-            pred_error = torch.abs(u_t - h)
-            g_t = torch.sigmoid(self.surprise_gate(pred_error))  # [B, D]
-            h = base_decay * (1.0 - 0.5 * g_t) * h + g_t * u_t
-            h_list.append(h.unsqueeze(1))
-
-            surprise_scalar = g_t.mean(dim=-1, keepdim=True)  # [B, 1]
-            surprise_list.append(surprise_scalar)
-
-            # 2. Engine II: Causal Shifted Fast-Weight Plasticity (Bind K_{t-1} -> V_t, then Recall with Q_t)
-            if enable_fast_weight:
-                k_t = K[:, t].unsqueeze(-1)  # [B, H, Dh, 1]
-                v_t = V[:, t].unsqueeze(-1)  # [B, H, Dh, 1]
-                q_t = Q[:, t].unsqueeze(-1)  # [B, H, Dh, 1]
-
-                # Causal Associative Write: bind previous token's Key (prev_k) to current token's Value (v_t)
-                if t > 0:
-                    v_pred = torch.matmul(F_mat, prev_k)  # [B, H, Dh, 1]
-                    synapse_err = v_t - v_pred
-                    s_gate = surprise_scalar.view(B, 1, 1, 1)
-                    eff_lr = fast_lr * (0.3 + 0.7 * s_gate)
-                    # Delta rule outer-product update: [B, H, Dh, 1] x [B, H, 1, Dh] -> [B, H, Dh, Dh]
-                    F_mat = fast_decay * F_mat + torch.matmul(eff_lr * synapse_err, prev_k.transpose(-1, -2))
-
-                # Associative Read: query the updated synaptic matrix using current token's Query (q_t)
-                recalled = torch.matmul(F_mat, q_t).squeeze(-1).reshape(B, H * Dh)
-                mem_list.append(recalled.unsqueeze(1))
-                prev_k = k_t
-
-        h_seq = torch.cat(h_list, dim=1)                  # [B, L, D]
-        surprise_trace = torch.cat(surprise_list, dim=1)  # [B, L]
+        h_seq, mem_seq, surprise_trace = tricore_fused_scan(
+            u_feat=u_feat,
+            u_surp_bias=u_surp_bias,
+            w_gate_logits=w_gate_logits,
+            hop_weights=hop_weights,
+            Q=Q,
+            K=K,
+            V=V,
+            base_decay=base_decay,
+            fast_decay=fast_decay,
+            fast_lr=fast_lr,
+            hop_proj=self.hop_proj,
+            enable_surprise_gate=enable_surprise_gate,
+            enable_fast_weight=enable_fast_weight,
+            enable_adaptive_loop=enable_adaptive_loop,
+            max_loops=self.max_loops,
+        )
 
         if enable_fast_weight:
-            mem_seq = torch.cat(mem_list, dim=1)          # [B, L, H*Dh]
             z = h_seq + self.proj_out(mem_seq)
         else:
             z = h_seq
 
-        # 3. Engine III: Surprise-Driven Adaptive Equilibrium Loop (Vectorized across L for GPU speed!)
         if enable_adaptive_loop:
-            s_expanded = surprise_trace.unsqueeze(-1)     # [B, L, 1]
-            for step in range(self.max_loops):
-                step_scale = s_expanded / float(step + 1)
-                z = z + step_scale * self.think_mlp(self.think_norm(z))
+            s_expanded = surprise_trace.unsqueeze(-1)
+            z = z + s_expanded * self.think_mlp(self.think_norm(z))
 
         out = residual + self.out_norm(z)
         return out, surprise_trace
@@ -148,13 +208,15 @@ class TriCoreLM(nn.Module):
         self,
         vocab_size: int,
         d_model: int = 128,
-        n_layers: int = 2,
+        n_layers: int = 1,
         d_fast: int = 32,
         max_loops: int = 2,
+        enable_surprise_gate: bool = True,
         enable_fast_weight: bool = True,
         enable_adaptive_loop: bool = True,
     ):
         super().__init__()
+        self.enable_surprise_gate = enable_surprise_gate
         self.enable_fast_weight = enable_fast_weight
         self.enable_adaptive_loop = enable_adaptive_loop
         self.embedding = nn.Embedding(vocab_size, d_model)
@@ -171,6 +233,7 @@ class TriCoreLM(nn.Module):
         for layer in self.layers:
             x, s = layer(
                 x,
+                enable_surprise_gate=self.enable_surprise_gate,
                 enable_fast_weight=self.enable_fast_weight,
                 enable_adaptive_loop=self.enable_adaptive_loop,
             )
