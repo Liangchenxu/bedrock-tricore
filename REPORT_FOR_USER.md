@@ -1,8 +1,8 @@
-# TriCore V8 完成报告
+# TriCore V9 完成报告
 
 **日期：** 2026-10-20  
-**版本：** `tricore-arch` 1.1.0  
-**状态：** V8 完成；V7 原生 O(1) 流式推理、3-Hop 链式推理、真实 Python 源码 Held-Out LM 全部保留；新增 3-Seed 统计稳健性验证、真实 CUDA 解码缓存/显存实测与一键交互式演示  
+**版本：** `tricore-arch` 1.2.0  
+**状态：** V9 完成；V7 原生 O(1) 流式推理、3-Hop 链式推理、真实 Python 源码 Held-Out LM 全部保留；新增零 `F_seq` 训练路径、4 链 5 组 3-Seed 消融与 32K 真实 CUDA 显存/延迟实测  
 **实测报告：** `results/BENCHMARK_REPORT.md`  
 **图表：** `results/tricore_vs_transformer.png`  
 **运行设备：** CUDA
@@ -11,7 +11,9 @@
 
 ## 0. 一页结论
 
-**V8（v1.1.0）结论：** V6/V7 数据全部保留；新增 3 seeds（`42/100/2026`）的紧凑 2-Hop MQAR 统计稳健性验证，以及真实 CUDA 解码状态/KV-cache 分配与延迟实测。Full 在 4× 间隔上为 **100.00 ± 0.00%**，优于 Transformer 的 **77.29 ± 9.88%**、No Engine II 的 **65.73 ± 9.04%** 和 No Engine III 的 **31.56 ± 10.58%**。真实分配下 TriCore 状态恒为 **17,408 B**，`L=2,048` 时 Transformer KV cache 为 **4,194,304 B（240.9×）**。完整 V8 脚本实测 **94.6 s**，未达到 60 秒目标，报告如实保留。
+**V9（v1.2.0）结论：** V6/V7 数据全部保留；训练期不再物化 `F_seq`，Engine III 已融合进 JIT scan。新增 4 链、5 组、3 seeds（`42/100/2026`）的紧凑 2-Hop MQAR 验证：Full 为 **100.00 ± 0.00% 域内 / 100.00 ± 0.00% 4× 间隔**；No Engine I 为 **5.65 ± 0.20% / 5.55 ± 0.83%**，No Engine II 为 **5.55 ± 0.34% / 5.31 ± 0.95%**，No Engine III 为 **23.41 ± 1.08% / 23.54 ± 2.73%**，未调参 Transformer 为 **25.08 ± 0.48% / 22.24 ± 3.96%**。真实 CUDA 分配下 TriCore 状态恒为 **17,408 B（17.00 KiB）/ 样本**；`L=32,768` 时 Transformer KV cache 为 **67,108,864 B（64.00 MiB）**，缩减 **3,855.1×**。实测解码延迟在 `L=8,192` 交叉（TriCore **1.755** vs Transformer **3.011 ms/token**），32K 为 **1.939 vs 9.572**。完整 V9 脚本实测 **475.6 s**（Track 4A 474.2 s，Track 4B 1.4 s），未达到 60 秒目标，报告如实保留。
+
+**V8（v1.1.0）历史结论（保留）：** 新增 3 seeds 的紧凑 2-Hop MQAR 方差检查，以及真实 CUDA 解码状态/KV-cache 分配与延迟实测。旧版 1 链配置下 Full 在 4× 间隔上为 **100.00 ± 0.00%**，优于 Transformer 的 **77.29 ± 9.88%**、No Engine II 的 **65.73 ± 9.04%** 和 No Engine III 的 **31.56 ± 10.58%**；旧版脚本耗时 **94.6 s**。V9 用更难的 4 链、5 组配置取代了该附录，V8 数字仅作历史记录保留。
 
 V7 在不改变 V6 数学公式、权重命名和 V6 双赛道数据的前提下，完成了三件事：
 
@@ -19,7 +21,7 @@ V7 在不改变 V6 数学公式、权重命名和 V6 双赛道数据的前提下
 2. **Track 3A（3-Hop 链式推理）：** 新增 `generate_3hop_recall_batch`，强制 `k_q -> m1_q -> m2_q -> v_q`。Full `max_loops=2` 达到 **100.00% 域内 / 100.00% 四倍间隔外推**；`max_loops=1` 的两跳上限只有 **25.39% / 23.91%**，2 层 Transformer 为 **23.83% / 23.44%**。见 §4.2。
 3. **Track 3B（真实 Python 源码 Held-Out LM）：** 新增 `load_real_python_corpus_batches`，直接读取本仓库 `tricore/model.py`、`tricore/tasks.py`、`run_experiment.py` 的 ASCII 字节流，最后 15% 作为严格未见后缀。TriCore **PPL 18.616 / next-byte acc 41.47%**；参数匹配 Transformer **19.428 / 28.15%**。见 §4.3。
 
-**必须同时看到的限制：** 全部结果仍是单 seed。Track 3A 是 4 链、4 查询、12 干扰 token 的合成任务；Track 3B 只使用本仓库的小型源码后缀，不是大规模人类代码基准。Full 在 Track 3A 的 100.00% 不能外推为通用推理能力，Track 3B 的 PPL 优势也不能外推为吞吐或调参后 Transformer 的全面优势；TriCore 在该训练循环中约慢 **38×**（57.7 s vs 1.5 s）。
+**必须同时看到的限制：** V6/V7 与 Track 3A/3B 仍是单 seed；V9 Track 4A 是 3 seed 的方差检查，不是显著性检验，也没有置信区间。Track 3A 是 4 链、4 查询、12 干扰 token 的合成任务；Track 3B 只使用本仓库的小型源码后缀，不是大规模人类代码基准。Full 在 Track 3A 的 100.00% 不能外推为通用推理能力，Track 3B 的 PPL 优势也不能外推为吞吐或调参后 Transformer 的全面优势；TriCore 在该训练循环中约慢 **38×**（57.7 s vs 1.5 s）。32K 延迟/显存是单机 B=1 实测，不是服务吞吐。
 
 ---
 
@@ -139,39 +141,43 @@ V6 修正了 V5 的关键缺陷：V5 在 `[LET, var_i, EQ, lit_i]` 中把答案 
 | 512 | 1,024.00 KB | 17.00 KB | 60.2× |
 | 2,048 | 4,096.00 KB | 17.00 KB | 240.9× |
 | 8,192 | 16,384.00 KB | 17.00 KB | 963.8× |
+| 16,384 | 32,768.00 KB | 17.00 KB | 1,927.5× |
 | 32,768 | 65,536.00 KB | 17.00 KB | **3,855.1×** |
 
-TriCore 单核状态为 `h`（128 floats）+ `F_mat`（4,096 floats）+ `prev_k`（128 floats）= **4,352 floats = 17,408 bytes = 17.00 KiB**，与序列长度无关。Transformer 公式为 `n_layers * 2 * L * D * 4 / 1024` KiB。该表是状态核算，不是实测解码服务基准。
+TriCore 单核状态为 `h`（128 floats）+ `F_mat`（4,096 floats）+ `prev_k`（128 floats）= **4,352 floats = 17,408 bytes = 17.00 KiB**，与序列长度无关。Transformer 公式为 `n_layers * 2 * L * D * 4 / 1024` KiB。该表是状态核算；V9 Track 4B 已在 §4.6 用真实 CUDA 分配与解码延迟实测到 32K。
 
-### 4.5 V8 Track 4A：3-Seed 统计稳健性（紧凑 2-Hop MQAR）
+### 4.5 V9 Track 4A：4 链 5 组 3-Seed 验证（紧凑 2-Hop MQAR）
 
-**协议：** seeds `42/100/2026`；350 步，batch 64，AdamW，`lr=3e-3`，weight decay `0.01`，cosine decay，clipping `1.0`；`d_model=32`，`d_fast=8`，1 条链、1 个查询、2 个训练噪声 token，序列长度 10；4× OOD 把噪声间隔从 2 拉到 8（序列长度 16）。每个数字是 3 个 seed 的 **mean ± std**，在 5 个固定评测 batch（每批 64 例）上计算。
+**协议：** seeds `42/100/2026`；350 步，batch 64，AdamW，`lr=3e-3`，weight decay `0.01`，cosine decay，clipping `1.0`；`d_model=64`，`d_fast=16`，4 条链、4 个查询、8 个训练噪声 token；4× OOD 把噪声间隔从 8 拉到 32（序列长度 40 → 64）。每个数字是 3 个 seed 的 **mean ± std**，在 5 个固定评测 batch（每批 64 例）上计算；4 选 1 随机基线为 25.0%。
 
 | 架构 | 参数 | 域内召回 | 4× 间隔召回 | 平均训练耗时 |
 | :--- | :---: | :---: | :---: | :---: |
-| **TriCore Full（`max_loops=2`）** | 16,559 | **100.00 ± 0.00%** | **100.00 ± 0.00%** | 10.99 s |
-| TriCore No Engine II: Fast-Weight | 16,559 | **100.00 ± 0.00%** | 65.73 ± 9.04% | 4.23 s |
-| TriCore No Engine III: Adaptive Loop | 16,559 | **100.00 ± 0.00%** | 31.56 ± 10.58% | 7.83 s |
-| Vanilla Transformer（2 层） | 23,296 | **100.00 ± 0.00%** | 77.29 ± 9.88% | 2.07 s |
+| **TriCore Full（`max_loops=2`）** | 56,655 | **100.00 ± 0.00%** | **100.00 ± 0.00%** | 59.60 s |
+| TriCore No Engine I: Surprise Gate | 56,655 | 5.65 ± 0.20% | 5.55 ± 0.83% | 48.52 s |
+| TriCore No Engine II: Fast-Weight | 56,655 | 5.55 ± 0.34% | 5.31 ± 0.95% | 9.39 s |
+| TriCore No Engine III: Adaptive Loop | 56,655 | 23.41 ± 1.08% | 23.54 ± 2.73% | 26.02 s |
+| Vanilla Transformer（2 层） | 83,456 | 25.08 ± 0.48% | 22.24 ± 3.96% | 2.01 s |
 
-**解读：** 紧凑域内任务对所有模型都饱和，因此域内 100% 不能区分架构；4× 间隔可以。Full 比 No Engine II 高 **+34.27** 个百分点，比 No Engine III 高 **+68.44**，比未调参 Transformer 高 **+22.71**。Full 的 seed 标准差为 0，所有非 Full 变体均非零。3 个 seed 只说明方差，不是显著性检验；该紧凑配置不能替代 V6/V7 的全尺寸单 seed 结论。
+**解读：** 只有 Full 同时饱和域内与 4× 间隔；所有消融都落在 **25.0%** 随机水平附近或以下。4× 间隔上 Full 比 No Engine I 高 **+94.45** 个百分点，比 No Engine II 高 **+94.69**，比 No Engine III 高 **+76.46**，比未调参 Transformer 高 **+77.76**。Full 的 seed 标准差为 0，所有非 Full 变体均非零。3 个 seed 只说明方差，不是显著性检验；该紧凑配置不能替代 V6/V7 的全尺寸单 seed 结论。
 
-### 4.6 V8 Track 4B：真实 CUDA 解码状态与 KV-Cache 实测
+### 4.6 V9 Track 4B：真实 CUDA 解码状态与 KV-Cache 实测到 32K
 
 batch 1，FP32，8 步 warm-up + 32 步计时；`CUDA Alloc Δ` 是 `empty_cache()` 后 `torch.cuda.memory_allocated()` 的增量。基线显式分配 `(K_cache, V_cache)`（形状 `(n_layers, L, 1, n_heads, d_head)`）并执行真实的 2 层 cached Transformer 解码（对完整因果 cache 做 scaled dot-product attention），不是公式估算。
 
 | 序列长度 | TriCore 状态 bytes | CUDA 分配 Δ | Transformer K+V bytes | CUDA 分配 Δ | 缩减 | TriCore ms/token | Transformer ms/token |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| 128 | 17,408 | 17,408 | 262,144 | 262,144 | **15.1×** | 2.086 | 1.199 |
-| 512 | 17,408 | 17,408 | 1,048,576 | 1,048,576 | **60.2×** | 1.895 | 1.074 |
-| 1,024 | 17,408 | 17,408 | 2,097,152 | 2,097,152 | **120.5×** | 1.774 | 1.165 |
-| 2,048 | 17,408 | 17,408 | 4,194,304 | 4,194,304 | **240.9×** | 1.780 | 1.319 |
+| 128 | 17,408 | 17,408 | 262,144 | 262,144 | **15.1×** | 2.448 | 1.474 |
+| 512 | 17,408 | 17,408 | 1,048,576 | 1,048,576 | **60.2×** | 1.804 | 1.049 |
+| 2,048 | 17,408 | 17,408 | 4,194,304 | 4,718,592 | **240.9×** | 1.756 | 1.274 |
+| 8,192 | 17,408 | 17,408 | 16,777,216 | 16,777,216 | **963.8×** | 1.755 | 3.011 |
+| 16,384 | 17,408 | 17,408 | 33,554,432 | 33,554,432 | **1,927.5×** | 2.047 | 4.993 |
+| 32,768 | 17,408 | 17,408 | 67,108,864 | 67,108,864 | **3,855.1×** | 1.939 | 9.572 |
 
-TriCore 状态为 `(D + H*d_head^2 + H*d_head) * 4 = 17,408` B = **17.00 KiB / 样本**（`D=128`，`H=4`，`d_head=32`），与 `L` 无关。基线 cache 为 `2 * n_layers * L * D * 4`，即每 token **2.00 KiB**，`L=2,048` 时 **4.00 MiB**。这是实测显存分配，不是公式；但 Transformer 在每个实测长度上仍然更快（1.07-1.32 ms vs 1.77-2.09 ms），所以这是内存优势，不是延迟优势。32K / 3,855.1× 仍是公式算术，未实测。
+TriCore 状态为 `(D + H*d_head^2 + H*d_head) * 4 = 17,408` B = **17.00 KiB / 样本**（`D=128`，`H=4`，`d_head=32`），与 `L` 无关。基线 cache 为 `2 * n_layers * L * D * 4`，即每 token **2.00 KiB**，`L=32,768` 时 **64.00 MiB**。`L=2,048` 的 allocator Δ 为 **4,718,592 B（4.50 MiB）**，而 tensor bytes 为 **4,194,304 B（4.00 MiB）**；缩减列按 tensor bytes 计算。实测延迟在 `L=8,192` 交叉（TriCore **1.755** vs Transformer **3.011 ms/token**），32K 为 **1.939 vs 9.572**；在 128/512/2,048，Transformer 仍然更快（1.474/1.049/1.274 vs 2.448/1.804/1.756）。这是单机 B=1 实测，不是服务吞吐。
 
 **一键演示：** `python demo_showcase.py` 用 `init_state` / `forward_step` 流式跑 `Key_A -> Bridge_1 -> Bridge_2 -> Target_Z`，打印 surprise-gate 轨迹和恒定的 17.00 KiB 仪表盘；无需 checkpoint，CUDA 不可用时自动回退 CPU。
 
-**运行时间：** 参考 CUDA 机器上完整 `python run_v8_verification.py` 为 **94.6 s**（Track 4A 94.1 s，Track 4B 0.52 s，含数据生成与评测），**未达到 60 秒目标**，此处如实记录。
+**运行时间：** 参考 CUDA 机器上完整 `python run_v9_verification.py` 为 **475.6 s**（Track 4A 474.2 s，Track 4B 1.4 s，含数据生成与评测），**未达到 60 秒目标**；5 组 × 3 seeds 共训练 15 个模型，此处如实记录。
 
 ---
 
@@ -180,23 +186,25 @@ TriCore 状态为 `(D + H*d_head^2 + H*d_head) * 4 = 17,408` B = **17.00 KiB / �
 
 | 文件 / 目录 | 状态 | 内容 |
 | :--- | :---: | :--- |
-| `run_v8_verification.py` | ✅ 已创建 | 3 seeds Track 4A + 真实 CUDA Track 4B；写出 `V8_METRICS.json` 与报告附录 |
+| `run_v9_verification.py` | ✅ 新增 | 4 链 5 组 3 seeds Track 4A + 32K 真实 CUDA Track 4B；写出 `V9_METRICS.json` 与报告附录 |
+| `run_v8_verification.py` | ✅ 兼容别名 | 保留旧命令入口，实际调用 `run_v9_verification.main` |
 | `demo_showcase.py` | ✅ 已创建 | 一键 3-hop 流式演示，无需 checkpoint，CPU/CUDA 均可运行 |
 | `LICENSE` | ✅ 已创建 | MIT License |
 | `.gitignore` | ✅ 已创建 | Python 缓存、虚拟环境、编辑器文件；保留 `results/` 报告与 PNG |
-| `pyproject.toml` | ✅ 已更新 | `tricore-arch` 1.1.0，Python ≥3.10，torch/numpy/matplotlib，MIT |
-| `README.md` | ✅ 已更新 | V8 标题、3-seed Track 4A、真实 CUDA Track 4B、V6/V7 数据保留、限制、复现命令 |
-| `SPEC_V2.md` | ✅ 已更新 | V8 规范、3-seed Track 4A、真实 CUDA Track 4B、V6 JIT 四元组合约、状态核算、任务布局、协议 |
+| `pyproject.toml` | ✅ 已更新 | `tricore-arch` 1.2.0，Python ≥3.10，torch/numpy/matplotlib，MIT |
+| `README.md` | ✅ 已更新 | V9 标题、4 链 5 组 3-seed Track 4A、32K 真实 CUDA Track 4B、V6/V7 数据保留、限制、复现命令 |
+| `SPEC_V2.md` | ✅ 已更新 | V9 规范、4 链 5 组 3-seed Track 4A、32K 真实 CUDA Track 4B、JIT 三元组合约、状态核算、任务布局、协议 |
 | `requirements.txt` | ✅ 已存在 | `torch>=2.0`、`numpy>=1.24`、`matplotlib>=3.7` |
 | `tricore/__init__.py` | ✅ 已更新 | 导出 block/LM/baseline 与全部任务加载器 |
 | `tricore/model.py` | ✅ 已更新 | `tricore_fused_scan`、双模型、`init_state` / `forward_step` 流式接口 |
 | `tricore/tasks.py` | ✅ 已更新 | 2-Hop MQAR + 因果字节码 + 3-Hop 召回 + 真实 Python 源码 held-out 字节流 |
 | `tests/test_sanity.py` | ✅ 已存在 | 前向/反向/形状/梯度流 |
-| `tests/test_v5.py` | ✅ 已创建 | JIT 四元组对 Python 参考的四组 scan flag 等价性 + 因果字节码形状/反向 |
+| `tests/test_v5.py` | ✅ 已更新 | JIT 三元组对 Python 参考的四组 scan flag 等价性、零 `F_seq` 检查 + 因果字节码形状/反向 |
 | `tests/test_v7_streaming.py` | ✅ 已创建 | 流式等价、17 KiB 恒定状态、3-Hop/真实语料梯度流 |
 | `run_experiment.py` | ✅ 已更新 | V6 双赛道、Track 1 五组消融、grad clipping、报告与 2×2 图 |
 | `run_v7_benchmark.py` | ✅ 已创建 | 仅运行 V7 流式检查与 Track 3，不重跑 V6 |
-| `results/BENCHMARK_REPORT.md` | ✅ 已生成 | V6 表格保留 + V7 流式/Track 3 实测 |
+| `results/BENCHMARK_REPORT.md` | ✅ 已生成 | V6 表格保留 + V7 流式/Track 3 + V9 Track 4 附录 |
+| `results/V9_METRICS.json` | ✅ 已生成 | V9 全部 Track 4A/4B 原始指标与协议 |
 | `results/tricore_vs_transformer.png` | ✅ 已生成 | 2×2 对比图 |
 | `REPORT_FOR_USER.md` | ✅ 本文件 | 完整交付说明 |
 
@@ -212,10 +220,10 @@ python run_experiment.py --steps 2 --code-steps 2   # 可选快速冒烟
 
 ## 6. 复现命令
 
-**V8 新增（v1.1.0）：**
+**V9 新增（v1.2.0）：**
 
 ```bash
-python run_v8_verification.py   # Track 4A 3-seed + Track 4B CUDA profiling
+python run_v9_verification.py   # Track 4A 4 链 5 组 3-seed + Track 4B 32K CUDA profiling
 python demo_showcase.py         # 一键 3-hop 流式演示
 ```
 
@@ -240,38 +248,40 @@ python tests/test_v7_streaming.py
 
 **关键文件：**
 
-- `tricore/model.py`：`@torch.jit.script tricore_fused_scan`（四元组返回）、向量化 5-D 多跳 `TriCoreBlock`、`TriCoreLM`、`BaselineTransformerLM`、`init_state` / `forward_step`
+- `tricore/model.py`：`@torch.jit.script tricore_fused_scan`（零 `F_seq` 三元组返回）、融合多跳 `TriCoreBlock`、`TriCoreLM`、`BaselineTransformerLM`、`init_state` / `forward_step`
 - `tricore/tasks.py`：2-Hop MQAR、因果字节码 `generate_contextual_code_lm_batch`、3-Hop `generate_3hop_recall_batch`、真实源码 `load_real_python_corpus_batches`
 - `run_experiment.py`：Track 1 五组消融、Track 2 两模型、V6 计时、cache 核算、Markdown 报告、matplotlib 2×2 图
 - `run_v7_benchmark.py`：流式等价/延迟/状态核算、Track 3A 三模型、Track 3B 两模型，并追加报告
-- `tests/test_v5.py`：JIT 与 Python 参考在四种 `enable_surprise_gate` × `enable_fast_weight` 组合下对 `h_seq`、`r1_seq`、`F_seq`、`surprise_trace` 的 `allclose` 等价性；`TriCoreLM` 前向/反向；因果字节码的形状、`pos + 1` mask、反向梯度检查
-- `tests/test_v7_streaming.py`：流式等价、17,408 bytes 恒定状态、3-Hop/真实语料形状与梯度检查；完整套件 6 passed
+- `tests/test_v5.py`：JIT 与 Python 参考在 `enable_surprise_gate` × `enable_fast_weight` × `enable_adaptive_loop` 组合下对 `h_seq`、`mem_seq`、`surprise_trace` 的 `allclose` 等价性；`forward` 与逐 token `forward_step` 的 `<1e-6` 等价性；`TriCoreLM` 前向/反向；因果字节码的形状、`pos + 1` mask、反向梯度检查
+- `tests/test_v7_streaming.py`：流式等价、17,408 bytes 恒定状态、3-Hop/真实语料形状与梯度检查；完整套件 **7 passed**
 
 ---
 
-## 7. 结论：V8 到底证明了什么
+## 7. 结论：V9 到底证明了什么
 
-V8 新增的证据是：在紧凑 2-Hop MQAR 上，3 个 seed 的 4× 间隔召回为 Full **100.00 ± 0.00%**、No Engine II **65.73 ± 9.04%**、No Engine III **31.56 ± 10.58%**、Transformer **77.29 ± 9.88%**；域内四者均为 100%，因此区分力来自 4× 间隔。真实 CUDA 分配下，TriCore 状态恒为 **17.00 KiB/样本**，`L=2,048` 的 Transformer KV cache 为 **4.00 MiB**，缩减 **240.9×**。但这仍是 3 个 seed 的方差检查，不是显著性检验；完整 V6/V7 表格仍为单 seed，V8 脚本耗时 **94.6 s**，未达到 60 秒目标。
+V9 新增的证据是：训练期不再物化 `F_seq`，Engine III 已融合进 JIT scan；在 4 链、5 组、3 seeds 的紧凑 2-Hop MQAR 上，4× 间隔召回为 Full **100.00 ± 0.00%**、No Engine I **5.55 ± 0.83%**、No Engine II **5.31 ± 0.95%**、No Engine III **23.54 ± 2.73%**、Transformer **22.24 ± 3.96%**；只有 Full 同时饱和域内与 4× 间隔。真实 CUDA 分配下，TriCore 状态恒为 **17.00 KiB/样本**，`L=32,768` 的 Transformer KV cache 为 **64.00 MiB**，缩减 **3,855.1×**；实测延迟在 `L=8,192` 交叉（1.755 vs 3.011 ms/token），32K 为 1.939 vs 9.572。但这仍是 3 个 seed 的方差检查，不是显著性检验；完整 V6/V7 表格仍为单 seed，V9 脚本耗时 **475.6 s**，未达到 60 秒目标。
 
 ### 已证明（在所述任务与预算内）
 
 1. **Full TriCore 能完成 2-Hop 链式联想召回**，并在 4× 对抗噪声间隔外推下保持 100.00%。
-2. **Engine II 和 Engine III 是该任务的关键**：去掉快权重或去掉隐空间重查询都会跌到随机水平附近。
-3. **Engine I 在本次 V6 运行中是必要的**：去掉后跌到 5.55%/4.14%，与 V5 的 91.88%/84.14% 不同；这提醒我们单 seed 消融结论的脆弱性。
-4. **V6 把多跳重查询从逐 token 循环改成跨全部位置的一次批量 5-D `matmul`**，保持公式等价；状态递归仍是串行，不能把它描述成并行前缀扫描或 kernel 级优化。
-5. **O(1) 状态核算是真实的**：17.00 KiB 与序列长度无关，32K 时相对 2 层 KV cache 为 3,855.1×。
+2. **Engine II 和 Engine III 是该任务的关键**：去掉快权重或去掉隐空间重查询都会跌到 25.0% 随机水平附近（5.31% / 23.54%）。
+3. **Engine I 在本次 V9 4 链运行中是必要的**：去掉后跌到 5.65%/5.55%，与 V5 的 91.88%/84.14% 不同；这提醒我们单 seed 消融结论的脆弱性，也说明 3-seed 方差检查仍不能替代显著性检验。
+4. **V6/V9 把多跳重查询做成跨全部位置的一次批量 5-D `matmul`**，V9 进一步把 Engine III 融合进 JIT scan；状态递归仍是串行，不能把它描述成并行前缀扫描或 kernel 级优化。
+5. **O(1) 状态是真实的**：17.00 KiB 与序列长度无关；V9 在真实 CUDA 上实测到 32K，KV cache 为 64.00 MiB，缩减 3,855.1×。
 6. **第二赛道管线可运行**：TriCore 在因果字节码任务上 PPL 3.17、解引用 100.00%；2 层 Transformer 为 3.56 / 19.63%，接近 16.67% 随机水平。这证明封闭语法上的两级指针查找可学习，不证明真实代码理解。
-7. **V7 流式路径与完整前向等价**：最大 logit 误差 5.96e-07，持久状态恒为 17,408 bytes，4,096 步实测 2.160 ms/token；训练期仍使用 `F_seq`。
+7. **流式路径与完整前向等价**：最大 logit 误差 5.96e-07，持久状态恒为 17,408 bytes，4,096 步实测 2.160 ms/token；V9 训练期不再物化 `F_seq`。
 8. **Track 3A 证明第二次 refinement 是必要的**：Full `max_loops=2` 为 100.00%/100.00%，`max_loops=1` 只有 25.39%/23.91%，差 74.61 个百分点；2 层 Transformer 为 23.83%/23.44%。
 9. **Track 3B 在真实源码的后缀上完成了 held-out 比较**：TriCore 223,887 参数达到 PPL 18.616 / 41.47%，参数匹配 Transformer 218,448 参数为 19.428 / 28.15%；TriCore 训练慢约 38×，且语料仅为本仓库源码。
+10. **Track 4B 在真实 CUDA 上测到 32K**：TriCore 状态恒为 17,408 B；Transformer 在 128/512/2,048 更快，但延迟在 8,192 交叉，32K 为 9.572 vs 1.939 ms/token。这是单机 B=1 结果，不是服务吞吐。
+11. **Track 4A 给出了 5 组 × 3 seeds 的 mean ± std**：Full 的 seed 标准差为 0，所有非 Full 变体非零；这是方差检查，不是显著性检验。
 
 ### 未证明 / 不应宣称
 
 - 自然语言、通用推理或大规模真实代码能力；Track 3B 只是本仓库的小型源码后缀。
 - 对调参后 Transformer 的全面优势；Track 1/3A 的 Transformer 未调参，Track 3B 只匹配参数量、未匹配算力。
-- 多 seed 稳健性、统计显著性、置信区间。
-- 生产吞吐、长上下文实测解码、分布式/混合精度/量化能力。
-- 训练显存的 O(1) 性质：V7 仍会物化 `F_seq`，训练激活随 `L` 增长；只有持久推理状态是 O(1)。
+- V6/V7 全尺寸赛道、Track 3A/3B 的多 seed 稳健性；V9 Track 4A 只有 3 seeds，且不是统计显著性、置信区间或功效分析。
+- 生产吞吐、128K 以上长上下文、分布式/混合精度/量化能力。
+- 训练显存的 O(1) 性质：V9 已删除 `F_seq` 大张量，但训练仍保存 `h_seq`、`mem_seq` 与 autograd 缓冲，不能宣称 activation-O(1)；只有持久推理状态是 O(1)。
 - “Engine I 在所有任务上都必要”或“三个引擎缺一不可”的普适结论；本次 No-I 跌到随机，但 V5 没有，说明结论对优化轨迹和 seed 敏感。
 - JIT 已接近硬件最优；它仍是编译后的 PyTorch 循环，状态递归仍串行。
 
@@ -279,12 +289,12 @@ V8 新增的证据是：在紧凑 2-Hop MQAR 上，3 个 seed 的 4× 间隔召�
 
 ## 8. 建议的下一步
 
-1. **多 seed**：至少 3 个 seed，报告 mean ± std，尤其是 No-Engine-I 的方差和 Track 3A/3B 的稳定性。
+1. **多 seed**：把 V9 的 3-seed 协议扩展到 V6/V7 全尺寸赛道与 Track 3A/3B，并报告置信区间/显著性，而不只是 mean ± std。
 2. **更强基线**：调参 Transformer，匹配非位置参数量、训练 token 与算力；当前 Track 3B 只匹配参数量。
 3. **更大真实代码语料**：用 held-out 文件/仓库替代本仓库 15% 后缀，才能检验真实代码泛化。
 4. **4–6 hop**：验证 latent re-query 是否随跳数扩展，以及 router 是否学会使用额外循环。
 5. **真正 kernel**：在 JIT + 向量化多跳 + 原生流式的基础上做 fused/chunked CUDA/Triton scan；减少小 kernel launch 与串行状态更新成本。
-6. **长上下文实测**：用真实 KV cache 解码对比 32K–128K 的延迟与显存，而不只做公式核算；V7 的 2.160 ms/token 只是单机 B=1 循环测量。
+6. **更长上下文实测**：V9 已用真实 KV cache 对比到 32K 的延迟与显存；下一步是 128K–1M，并比较生产级 serving stack。
 
 ---
 
@@ -292,7 +302,7 @@ V8 新增的证据是：在紧凑 2-Hop MQAR 上，3 个 seed 的 4× 间隔召�
 
 | 项目 | 状态 |
 | :--- | :---: |
-| V6 模型代码（JIT 四元组 + 向量化多跳 + LM + baseline） | ✅ 完成并保留 |
+| V6 模型代码（JIT 三元组 + 零 F_seq 多跳 + LM + baseline） | ✅ 完成并保留 |
 | Track 1 五组消融 | ✅ 完成并写入报告 |
 | Track 2 因果字节码 Contextual Code LM | ✅ 完成并写入报告 |
 | V6 / V5 / V4 耗时对比 | ✅ 80.0 s vs 125.3 s vs 136.0 s（1.57× / 1.70×） |
@@ -300,16 +310,20 @@ V8 新增的证据是：在紧凑 2-Hop MQAR 上，3 个 seed 的 4× 间隔召�
 | V7 推理状态核算 | ✅ 17,408 bytes = 17.00 KiB；L=128..4,096 恒定 |
 | Track 3A：3-Hop 链式推理 | ✅ 完成；Full 100.00%/100.00%，max_loops=1 25.39%/23.91% |
 | Track 3B：真实 Python 源码 held-out LM | ✅ 完成；TriCore PPL 18.616 / 41.47%，Transformer 19.428 / 28.15% |
-| README / SPEC 同步 | ✅ 已更新为 V8 数据（V6/V7 保留） |
-| LICENSE / .gitignore / pyproject | ✅ 已创建；版本 1.1.0 |
-| 测试文件 | ✅ `tests/test_v5.py`、`tests/test_v7_streaming.py`；`python -m pytest -q` → **6 passed** |
-| 结果报告与图 | ✅ 已生成；V6/V7 表格保留 + V8 附录追加 |
+| V9 零 `F_seq` 训练路径 | ✅ Engine III 融合进 `tricore_fused_scan`；scan 返回 `(h_seq, mem_seq, surprise_trace)` |
+| V9 Track 4A：4 链 5 组 3 seeds | ✅ Full 100.00 ± 0.00% / 100.00 ± 0.00%；No-I 5.65/5.55%，No-II 5.55/5.31%，No-III 23.41/23.54%，Transformer 25.08/22.24% |
+| V9 Track 4B：32K 真实 CUDA | ✅ 17,408 B 恒定 vs 64.00 MiB KV cache = 3,855.1×；延迟在 8,192 交叉，32K 1.939 vs 9.572 ms/token |
+| README / SPEC 同步 | ✅ 已更新为 V9 数据（V6/V7 保留） |
+| LICENSE / .gitignore / pyproject | ✅ 已创建；版本 1.2.0 |
+| 测试文件 | ✅ `tests/test_v5.py`、`tests/test_v7_streaming.py`；`python -m pytest -q` → **7 passed** |
+| 结果报告与图 | ✅ 已生成；V6/V7 表格保留 + V9 Track 4 附录 |
+| 原始指标 | ✅ `results/V9_METRICS.json`（含 per-seed 审计与 Track 4B 六行原始数据） |
 | 本汇报文件 | ✅ 已生成 |
 
-> 一句话总结：**V7 在 V6 的恒定状态与向量化多跳之上补上了原生 `init_state` / `forward_step` 流式解码（17,408 bytes 恒定状态、5.96e-07 等价误差、2.160 ms/token），并用 Track 3A 证明第二次 refinement 是第三跳所必需（Full 100.00% vs 两跳上限 25.39%），用 Track 3B 在真实仓库源码的严格 15% held-out 后缀上取得 PPL 18.616 / 41.47%（参数匹配 Transformer 19.428 / 28.15%）。但全部结果仍是单 seed，Track 3A 是合成任务，Track 3B 语料很小且 TriCore 训练约慢 38×，不能据此宣称通用推理、真实代码理解或吞吐优势。**
+> 一句话总结：**V9 把 Engine III 融合进 JIT scan，训练期不再物化 `F_seq`；在 4 链 5 组 3 seeds 的紧凑 2-Hop MQAR 上，Full 保持 100.00 ± 0.00% 域内/4× 间隔，而所有消融与未调参 Transformer 都在 25% 随机水平附近。真实 CUDA 上 TriCore 状态恒为 17.00 KiB，32K 时相对 64.00 MiB KV cache 缩减 3,855.1×，解码延迟在 8,192 交叉并在 32K 达到 1.939 vs 9.572 ms/token。但 V6/V7 与 Track 3A/3B 仍是单 seed，Track 4A 只是 3-seed 方差检查，32K 是单机 B=1 实测，不能据此宣称通用推理、真实代码理解、统计显著性、生产吞吐或 activation-O(1)。**
 
 ---
 
 <p align="center">
-  <i>TriCore V7 — constant state, surprise-gated writes, causal delta memory, a vectorized latent loop, and native one-token streaming.</i>
+  <i>TriCore V9 — zero-F_seq training, constant state, surprise-gated writes, causal delta memory, a fused latent loop, and native one-token streaming.</i>
 </p>

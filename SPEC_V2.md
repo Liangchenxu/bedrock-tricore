@@ -1,19 +1,19 @@
-# TriCore V8 — Architecture Specification and Benchmark Record
+# TriCore V9 — Architecture Specification and Benchmark Record
 
-**Project:** `tricore-arch` 1.1.0  
-**Operator:** attention-free, constant-size recurrent state, causal shifted fast-weight binding, vectorized latent multi-hop re-query  
-**Runtime:** `@torch.jit.script tricore_fused_scan` for the O(1) state, a batched 5-D multi-hop training pass, and native `init_state` / `forward_step` per-token decoding  
-**Status:** research reference; three evaluation tracks, including a real-source held-out LM  
+**Project:** `tricore-arch` 1.2.0  
+**Operator:** attention-free, constant-size recurrent state, causal shifted fast-weight binding, fused latent multi-hop re-query  
+**Runtime:** `@torch.jit.script tricore_fused_scan` for the O(1) state and zero-`F_seq` multi-hop training, plus native `init_state` / `forward_step` per-token decoding  
+**Status:** research reference; V6/V7 records plus a 4-chain, five-way, 3-seed V9 verification and 32K CUDA profiling  
 **Executable source of truth:** `tricore/model.py`  
 **Benchmark source of truth:** `results/BENCHMARK_REPORT.md`
 
-> **Document provenance.** This specification describes V7. The equations, shapes, flags, state accounting, and streaming API mirror `tricore/model.py`, `tricore/tasks.py`, `run_experiment.py`, and `run_v7_benchmark.py`. V7 is strictly additive: the V6 weights, formulas, and training path are unchanged. The benchmark numbers are artifacts generated on the reference machine. If this document and the code disagree, the code wins and this document must be corrected.
+> **Document provenance.** This specification describes V9. The equations, shapes, flags, state accounting, and streaming API mirror `tricore/model.py`, `tricore/tasks.py`, `run_experiment.py`, and `run_v9_verification.py`. V9 is additive to V6/V7 at the API level, preserves every parameter name, and removes the training-only `F_seq` snapshot tensor by fusing Engine III into the JIT scan. The benchmark numbers are artifacts generated on the reference machine. If this document and the code disagree, the code wins and this document must be corrected.
 
 ---
 
 ## 1. Scope
 
-TriCore V8 is a sequence operator with three independently ablatable mechanisms:
+TriCore V9 is a sequence operator with three independently ablatable mechanisms:
 
 1. **Engine I — Surprise-Gated State Collapse and Write Protection:** a gated recurrent vector `h_t`, plus a learned per-head write gate on the fast-weight learning rate.
 2. **Engine II — Subspace-Aligned Causal Shifted Fast Weights:** a per-head delta-rule matrix `F_t` that binds `K_{t-1}` to `V_t`, with a shared canonical address for Q/K/V.
@@ -21,7 +21,7 @@ TriCore V8 is a sequence operator with three independently ablatable mechanisms:
 
 V6 added two engineering/evaluation contributions without changing the equations:
 
-- A TorchScript-JIT recurrent state scan that returns `h`, hop-1 reads, and per-position `F` snapshots; the multi-hop refinement then runs as a batched 5-D matrix product across every timestep.
+- A TorchScript-JIT recurrent state scan that returns `h`, the routed multi-hop memory read, and the surprise trace. V9 fuses Engine III into this same causal loop, so the training path does not allocate or stack the old `F_seq` snapshot tensor.
 - A corrected Track 2, **Causal Bytecode LM**, whose `[LET, alias, var, SEMI]`, `[ALIAS, var, lit, SEMI]`, `[NOP, var, SEMI, SEMI]`, and `[RET, alias, lit, SEMI]` format forces a two-level pointer dereference at the return alias position `pos + 1`.
 
 V7 adds three contributions while keeping all V6 equations and parameter names:
@@ -29,6 +29,12 @@ V7 adds three contributions while keeping all V6 equations and parameter names:
 - A native streaming API: `TriCoreBlock.init_state` / `TriCoreBlock.forward_step` and the matching `TriCoreLM` methods.  The persistent tuple is exactly `(h, F_mat, prev_k)`, is independent of `L`, and does not materialize `F_seq`.
 - **Track 3A**, a 3-hop chained-recall task with shuffled one-, two-, and three-hop facts plus an adversarial distractor gap; `max_loops=1` is limited to two hops, while `max_loops=2` performs the third re-query.
 - **Track 3B**, a byte-level held-out LM over the actual repository Python sources (`tricore/model.py`, `tricore/tasks.py`, `run_experiment.py`), with the final 15% of the stream reserved as an unseen validation suffix.
+
+V9 adds one runtime change and two evaluations:
+
+- **Zero-`F_seq` training:** Engine III's fixed re-query is inside `tricore_fused_scan`; it uses the current `F_mat` at each timestep and returns `(h_seq, mem_seq, surprise_trace)`. The only sequence-wide memory read is `mem_seq: [B, L, H*d_head]`; `F_seq: [B, L, H, d_head, d_head]` is never allocated.
+- **Track 4A:** a 4-chain 2-Hop MQAR with four queries, training `noise_len=8`, 4x OOD `noise_len=32`, `d_model=64`, `d_fast=16`, 350 steps, and three seeds; all five models are reported as mean ± std.
+- **Track 4B:** real CUDA allocation and cached-decoding latency at `L=128..32,768`.
 
 The specification has six non-goals:
 
@@ -39,7 +45,7 @@ The specification has six non-goals:
 - It does **not** claim that the JIT scan is a custom CUDA kernel or a production-throughput solution.
 - It does **not** claim that the recurrent state update is parallel; only the multi-hop refinement is vectorized across `L`.
 
-The evidence is three single-seed V6/V7 evaluation tracks — a 500-step five-variant 2-hop associative recall study, a 450-step two-model causal bytecode LM study, and a V7 study with streaming equivalence/memory checks, a 450-step 3-hop comparison, and a 300-step real-source held-out LM comparison — plus V8's 3-seed compact 2-Hop MQAR variance check and measured CUDA decode-state/KV-cache profiling.
+The evidence is three single-seed V6/V7 evaluation tracks — a 500-step five-variant 2-hop associative recall study, a 450-step two-model causal bytecode LM study, and a V7 study with streaming equivalence/memory checks, a 450-step 3-hop comparison, and a 300-step real-source held-out LM comparison — plus V9's 4-chain, five-way, 3-seed 2-Hop MQAR variance check and measured CUDA decode-state/KV-cache profiling through 32K.
 
 ---
 
@@ -78,7 +84,7 @@ numpy>=1.24.0
 matplotlib>=3.7.0
 ```
 
-`pyproject.toml` declares `tricore-arch==1.1.0`, Python `>=3.10`, and the same runtime dependencies. `pip install -e .` installs the `tricore` import package.
+`pyproject.toml` declares `tricore-arch==1.2.0`, Python `>=3.10`, and the same runtime dependencies. `pip install -e .` installs the `tricore` import package.
 
 ### 2.2 Public API
 
@@ -133,11 +139,10 @@ def tricore_fused_scan(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
 ```
 
-Returns `(h_seq, r1_seq, F_seq, surprise_trace)` with shapes:
+Returns `(h_seq, mem_seq, surprise_trace)` with shapes:
 
 - `h_seq: [B, L, D]`
-- `r1_seq: [B, L, H, d_head, 1]`; zeros when `enable_fast_weight=False`
-- `F_seq: [B, L, H, d_head, d_head]`; a single zero snapshot when `enable_fast_weight=False`
+- `mem_seq: [B, L, H*d_head]`; the routed multi-hop read. When `enable_adaptive_loop=False` it is the hop-1 read; when `enable_fast_weight=False` it is zeros.
 - `surprise_trace: [B, L]`
 
 The function allocates only O(1) state per sample:
@@ -238,7 +243,7 @@ r_t^{\text{out}} = r_{\text{accum}}
 
 `r^(i)` is `[B, H, d_head, 1]`; `H_i` is `[1, H, d_head, d_head]`; normalization is L2 over `dim=-2`. With `max_loops=2`, the initial read is hop 1, `step=0` is hop 2, and `step=1` is an extra latent refinement. The loop count is fixed.
 
-V6 stores the per-position fast-weight state as `F_seq: [B, L, H, d_head, d_head]` and applies the same equations to every timestep at once. Each refinement is a batched 5-D `torch.matmul(F_seq, q_next)`, so the Python loop is over `max_loops`, not over `L`. The state recurrence that produces `F_seq` remains serial.
+V9 fuses these equations into the causal scripted scan: each timestep uses its current `F_mat`, and the scan returns only the fused `mem_seq: [B, L, H*d_head]`. It never allocates or stacks `F_seq: [B, L, H, d_head, d_head]`. The state recurrence and the fixed-hop refinement remain causal and serial in `L`; the Python loop is over `max_loops`.
 
 When `enable_adaptive_loop=False`, `r_t^out = r_t^(0)` and the refinement MLP is skipped.
 
@@ -312,9 +317,9 @@ out_t, surprise_t, new_state = block.forward_step(
 logits_t, surprise_t, new_states = lm.forward_step(idx_t, states, step_idx)
 ```
 
-`TriCoreBlock.forward_step` performs the same causal-shifted Engine I update, Engine II delta-rule write/read, fixed-hop Engine III refinement, and readout as `forward` for one timestep. `step_idx == 0` skips the fast-weight write exactly as the scan does. `TriCoreLM.init_state` returns one block state per layer; a single block state is also accepted for a one-layer model. Calling `forward_step` for `t=0..L-1` and stacking the logits must match `forward(idx)` under `torch.allclose`; the V7 test uses `atol=1e-5`.
+`TriCoreBlock.forward_step` performs the same causal-shifted Engine I update, Engine II delta-rule write/read, fixed-hop Engine III refinement, and readout as `forward` for one timestep. `step_idx == 0` skips the fast-weight write exactly as the scan does. `TriCoreLM.init_state` returns one block state per layer; a single block state is also accepted for a one-layer model. Calling `forward_step` for `t=0..L-1` and stacking the logits must match `forward(idx)`; V9 checks both logits and surprise with `< 1e-6` maximum absolute error.
 
-The streaming state excludes the training-only `F_seq: [B, L, H, d_head, d_head]` tensor. `forward_step` therefore has O(1) persistent inference state, but the training path still materializes `F_seq` for vectorized multi-hop updates.
+The streaming state excludes the old training-only `F_seq` tensor entirely. `forward_step` has O(1) persistent inference state, and V9's training scan no longer materializes `F_seq`; it returns the fused `mem_seq` read instead.
 
 ---
 
@@ -335,7 +340,7 @@ For `D=128`, `H=4`, `d_head=32`, `n_layers=1`:
 C_{\text{TriCore}} = \frac{(D + H d_{\text{head}}^2 + H d_{\text{head}}) \cdot 4}{1024}\ \text{KiB} = 17.00\ \text{KiB}
 ```
 
-The persistent inference state is exactly these tensors; it is O(1) in `L`. V6 additionally materializes `F_seq: [B, L, H, d_head, d_head]` during training so Engine III can re-query all positions in parallel. V7's `forward_step` carries only `h`, `F_mat`, and `prev_k`; `F_seq` is a training activation, not a persistent inference cache, and it is not carried across decoding steps. The measured V7 streaming state is exactly 17,408 bytes per sample at FP32 and stays constant from `L=128` to `L=4096`. Training memory is not O(1): `F_seq` scales as `O(B * L * H * d_head^2)`, and the measured speedup includes that cost.
+The persistent inference state is exactly these tensors; it is O(1) in `L`. V9's `forward_step` carries only `h`, `F_mat`, and `prev_k`. The training scan uses the same O(1) state recurrence and fuses Engine III per timestep, so it no longer allocates `F_seq: [B, L, H, d_head, d_head]`; training still stores `h_seq`, `mem_seq`, and autograd buffers, so it is not activation-O(1). The measured V7 streaming state is exactly 17,408 bytes per sample at FP32 and stays constant from `L=128` to `L=4096`.
 
 ### 4.2 Parameters
 
@@ -464,7 +469,7 @@ The V6 Full timing includes data generation, forward, backward, and optimizer st
 
 ### 6.6 Evaluation limits
 
-There is no multi-seed confidence interval for the full V6/V7 Track 1/2/3 reference runs, no hyperparameter search for the Transformer, and no FLOP matching. V8 adds a 3-seed mean ± std check only for a compact 2-Hop MQAR (`d_model=32`, 1 chain, 1 query); it is a variance check, not a significance test, and it does not repower the full-size runs. Track 1/2 have no real held-out set. Track 3B has a real-source held-out suffix but the corpus is only this small repository. Track 2 and Track 3A are synthetic; Track 3B is not a human-code benchmark.
+There is no multi-seed confidence interval for the full V6/V7 Track 1/2/3 reference runs, no hyperparameter search for the Transformer, and no FLOP matching. V9 adds a 4-chain, five-way, 3-seed mean ± std check for Track 4A (`d_model=64`, 4 chains, 4 queries); it is a variance check, not a significance test, and it does not repower the full-size runs. Track 1/2 have no real held-out set. Track 3B has a real-source held-out suffix but the corpus is only this small repository. Track 2 and Track 3A are synthetic; Track 3B is not a human-code benchmark.
 
 ---
 
@@ -515,6 +520,7 @@ There is no multi-seed confidence interval for the full V6/V7 Track 1/2/3 refere
 | 512 | 1,024.00 KB | 17.00 KB | 60.2x |
 | 2,048 | 4,096.00 KB | 17.00 KB | 240.9x |
 | 8,192 | 16,384.00 KB | 17.00 KB | 963.8x |
+| 16,384 | 32,768.00 KB | 17.00 KB | 1,927.5x |
 | 32,768 | 65,536.00 KB | 17.00 KB | **3,855.1x** |
 
 ### 7.5 V7 streaming
@@ -547,31 +553,34 @@ Chance is 25% (four values). The second refinement is required to complete `k_q 
 
 The corpus is the ASCII byte stream of this repository's `tricore/model.py`, `tricore/tasks.py`, and `run_experiment.py`; the final 15% is an unseen suffix. The Transformer is parameter-matched with a short position table, but TriCore is about 38x slower in this small training loop. This is a single-seed quality/budget observation, not a throughput or human-code claim.
 
-### 7.8 Track 4A: 3-seed statistical verification
+### 7.8 Track 4A: V9 4-chain five-way 3-seed verification
 
-`run_v8_verification.py` runs a compact 2-Hop MQAR under seeds `42/100/2026`: 350 steps, batch 64, AdamW, `lr=3e-3`, weight decay `0.01`, cosine decay, clipping `1.0`; `d_model=32`, `d_fast=8`, 1 chain, 1 query, `noise_len=2`, `vocab_size=64` (sequence length 10). The 4x OOD test uses gap 8 (sequence length 16). Metrics are mean ± std over seeds on 5 fixed evaluation batches of 64 examples.
+`run_v9_verification.py` runs a 4-chain 2-Hop MQAR under seeds `42/100/2026`: 350 steps, batch 64, AdamW, `lr=3e-3`, weight decay `0.01`, cosine decay, clipping `1.0`; `d_model=64`, `d_fast=16`, 4 heads, `max_loops=2`, 4 chains, 4 queries, training `noise_len=8`, `vocab_size=64` (sequence length 40). The 4x OOD test uses `noise_len=32` (sequence length 64). Metrics are mean ± std over seeds on 5 fixed evaluation batches of 64 examples; random baseline is 25.0%.
 
 | Variant | Parameters | In-domain recall | 4x-gap recall | Mean train time |
 | :--- | :---: | :---: | :---: | :---: |
-| **TriCore Full (`max_loops=2`)** | 16,559 | **100.00 ± 0.00%** | **100.00 ± 0.00%** | 10.99 s |
-| TriCore No Engine II: Fast-Weight | 16,559 | **100.00 ± 0.00%** | 65.73 ± 9.04% | 4.23 s |
-| TriCore No Engine III: Adaptive Loop | 16,559 | **100.00 ± 0.00%** | 31.56 ± 10.58% | 7.83 s |
-| Vanilla Transformer (2-layer) | 23,296 | **100.00 ± 0.00%** | 77.29 ± 9.88% | 2.07 s |
+| **TriCore Full (`max_loops=2`)** | 56,655 | **100.00 ± 0.00%** | **100.00 ± 0.00%** | 59.60 s |
+| TriCore No Engine I: Surprise Gate | 56,655 | 5.65 ± 0.20% | 5.55 ± 0.83% | 48.52 s |
+| TriCore No Engine II: Fast-Weight | 56,655 | 5.55 ± 0.34% | 5.31 ± 0.95% | 9.39 s |
+| TriCore No Engine III: Adaptive Loop | 56,655 | 23.41 ± 1.08% | 23.54 ± 2.73% | 26.02 s |
+| Vanilla Transformer (2-layer) | 83,456 | 25.08 ± 0.48% | 22.24 ± 3.96% | 2.01 s |
 
-The compact in-domain task saturates for every model. The 4x gap separates them: Full is `+34.27` points over No Engine II, `+68.44` over No Engine III, and `+22.71` over the untuned Transformer on the seed mean. Full has zero seed variance; all non-Full variants have non-zero variance. With three seeds this is a variance check, not a significance test, and the compact configuration is not a replacement for the V6/V7 reference runs.
+Only Full saturates both evaluations. All ablations are at or below the `25.0%` four-way chance level. On the 4x gap, Full is `+94.45` points over No Engine I, `+94.69` over No Engine II, `+76.46` over No Engine III, and `+77.76` over the untuned Transformer on the seed mean. Full has zero seed variance; all non-Full variants have non-zero variance. With three seeds this is a variance check, not a significance test, and the compact configuration is not a replacement for the V6/V7 reference runs.
 
-### 7.9 Track 4B: measured CUDA decode state and KV cache
+### 7.9 Track 4B: measured CUDA decode state and KV cache to 32K
 
 Measured on CUDA, batch size 1, FP32, 8 warm-up + 32 timed steps. `CUDA Alloc Δ` is the `torch.cuda.memory_allocated()` delta after `empty_cache()`. The baseline performs a real cached 2-layer Transformer decode with scaled dot-product attention over the full causal cache; it is not a formula estimate.
 
 | Length | TriCore state bytes | CUDA Alloc Δ | Transformer K+V bytes | CUDA Alloc Δ | Reduction | TriCore ms/token | Transformer ms/token |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| 128 | 17,408 | 17,408 | 262,144 | 262,144 | **15.1x** | 2.086 | 1.199 |
-| 512 | 17,408 | 17,408 | 1,048,576 | 1,048,576 | **60.2x** | 1.895 | 1.074 |
-| 1,024 | 17,408 | 17,408 | 2,097,152 | 2,097,152 | **120.5x** | 1.774 | 1.165 |
-| 2,048 | 17,408 | 17,408 | 4,194,304 | 4,194,304 | **240.9x** | 1.780 | 1.319 |
+| 128 | 17,408 | 17,408 | 262,144 | 262,144 | **15.1x** | 2.448 | 1.474 |
+| 512 | 17,408 | 17,408 | 1,048,576 | 1,048,576 | **60.2x** | 1.804 | 1.049 |
+| 2,048 | 17,408 | 17,408 | 4,194,304 | 4,718,592 | **240.9x** | 1.756 | 1.274 |
+| 8,192 | 17,408 | 17,408 | 16,777,216 | 16,777,216 | **963.8x** | 1.755 | 3.011 |
+| 16,384 | 17,408 | 17,408 | 33,554,432 | 33,554,432 | **1,927.5x** | 2.047 | 4.993 |
+| 32,768 | 17,408 | 17,408 | 67,108,864 | 67,108,864 | **3,855.1x** | 1.939 | 9.572 |
 
-The TriCore state is `(D + H*d_head^2 + H*d_head) * 4 = 17,408` bytes = **17.00 KiB per sample** for `D=128`, `H=4`, `d_head=32`, independent of `L`. The baseline cache is `2 * n_layers * L * D * 4`, i.e. 2.00 KiB per token, reaching 4.00 MiB at `L=2,048`. The Transformer remains faster per token at every measured length; the result is a measured memory advantage, not a latency advantage. The 32K/3,855.1x row stays arithmetic. Full V8 script runtime on the reference CUDA machine is **94.6 s** (Track 4A 94.1 s, Track 4B 0.52 s), so it is not a 60-second-compliant run.
+The TriCore state is `(D + H*d_head^2 + H*d_head) * 4 = 17,408` bytes = **17.00 KiB per sample** for `D=128`, `H=4`, `d_head=32`, independent of `L`. The baseline cache is `2 * n_layers * L * D * 4`, i.e. 2.00 KiB per token, reaching **64.00 MiB at `L=32,768`**. The `L=2,048` allocator delta is `4,718,592 B` (4.50 MiB) while the tensor bytes are `4,194,304 B` (4.00 MiB); the reduction column uses tensor bytes. The measured Transformer is faster at short lengths, but the per-token latency inverts at `L=8,192` (`3.011` vs TriCore `1.755` ms/token) and reaches `9.572` vs `1.939` ms/token at `L=32,768`. This is a measured memory and latency result for one machine at B=1, not a serving-throughput claim.
 
 ---
 
@@ -586,9 +595,9 @@ The TriCore state is `(D + H*d_head^2 + H*d_head) * 4 = 17,408` bytes = **17.00 
 3. `enable_surprise_gate=True, enable_fast_weight=False` (No Engine II)
 4. both flags `False`
 
-Engine III is outside the scripted scan and is exercised through `TriCoreLM`; the causal bytecode task has separate shape, mask, and backward checks.
+Engine III is fused inside the scripted scan and is exercised through `TriCoreLM`; the causal bytecode task has separate shape, mask, and backward checks.
 
-All four outputs (`h_seq`, `r1_seq`, `F_seq`, `surprise_trace`) must satisfy `torch.allclose(atol=1e-6, rtol=1e-5)`. The test also checks the causal bytecode shapes, the dereference mask at `pos + 1`, and backward gradients.
+All three outputs (`h_seq`, `mem_seq`, `surprise_trace`) must satisfy `torch.allclose(atol=1e-6, rtol=1e-5)`. The test also checks that full `forward` matches token-by-token `forward_step` with `< 1e-6` maximum absolute error, plus the causal bytecode shapes, the dereference mask at `pos + 1`, and backward gradients.
 
 ### 8.2 Sanity
 
@@ -602,9 +611,9 @@ All four outputs (`h_seq`, `r1_seq`, `F_seq`, `surprise_trace`) must satisfy `to
 2. The persistent state is exactly `batch_size * 17,408` bytes at `t=16` and `t=512`.
 3. `generate_3hop_recall_batch` shapes/targets and the real Python corpus loader support a finite gradient backward pass.
 
-The complete suite currently reports 6 passing tests. `run_v7_benchmark.py` regenerates only the V7 streaming and Track 3 sections; it preserves the V6 Track 1/Track 2 tables in `results/BENCHMARK_REPORT.md`.
+The complete suite currently reports 7 passing tests. `run_v7_benchmark.py` regenerates only the V7 streaming and Track 3 sections; it preserves the V6 Track 1/Track 2 tables in `results/BENCHMARK_REPORT.md`.
 
-V8 adds no new numerical invariant to the model. `run_v8_verification.py` exercises the existing training path under three seeds and writes `results/V8_METRICS.json`; `demo_showcase.py` exercises `init_state` / `forward_step` end to end. Track 4A is a 3-seed compact rerun, and Track 4B is a real CUDA allocation/latency measurement, both reported in sections 7.8-7.9.
+V9 adds no new parameter names. `run_v9_verification.py` exercises the zero-`F_seq` training path under three seeds and writes `results/V9_METRICS.json`; `demo_showcase.py` exercises `init_state` / `forward_step` end to end. Track 4A is a 4-chain, five-way, 3-seed rerun, and Track 4B is a real CUDA allocation/latency measurement through `L=32,768`, both reported in sections 7.8-7.9.
 
 ### 8.4 Full run
 
@@ -623,7 +632,7 @@ python tests/test_v5.py
 python tests/test_v7_streaming.py
 python run_experiment.py
 python run_v7_benchmark.py
-python run_v8_verification.py
+python run_v9_verification.py
 python demo_showcase.py
 python run_experiment.py --steps 2 --code-steps 2  # smoke
 ```
@@ -643,18 +652,18 @@ python run_experiment.py --steps 2 --code-steps 2  # smoke
 7. **Write protection.** Engine I retains a learned write gate; `enable_surprise_gate=False` is the unconditional-delta ablation.
 8. **Latent re-query.** Engine III maps the previous read back into query space and re-queries the same `F_mat`.
 9. **Independent ablations.** Flags gate compute without changing parameter registration.
-10. **JIT equivalence.** Any change to `tricore_fused_scan` must pass `tests/test_v5.py` on all four returned tensors.
+10. **JIT equivalence.** Any change to `tricore_fused_scan` must pass `tests/test_v5.py` on all three returned tensors and keep `forward` versus `forward_step` below `1e-6` maximum absolute error.
 11. **Fixed loop count.** `max_loops` is a constant; do not describe Engine III as adaptive computation time.
-12. **Vectorized refinement.** Engine III must re-query `F_seq` with one batched 5-D `matmul` per fixed hop; the Python loop is over `max_loops`, not `L`. The state recurrence itself remains serial.
+12. **Zero `F_seq`.** Engine III must re-query the current `F_mat` inside the causal scan and return only `mem_seq`; no training path may allocate or stack `F_seq: [B, L, H, d_head, d_head]`.
 13. **Causal dereference.** In Track 2, `deref_mask` must mark the return alias position `pos + 1`, never the literal position, and `LET`/`ALIAS` must not place the answer next to the query alias.
 14. **Reproducible artifacts.** `python run_experiment.py` must regenerate the report and plot, and state accounting must include `prev_k`.
 
 ### 9.2 Open work
 
-- 3-seed mean ± std for the full-size V6/V7 tracks (V8 already does the compact 2-Hop MQAR) and a significance test.
+- 3-seed mean ± std for the full-size V6/V7 tracks (V9 already does the 4-chain 2-Hop MQAR) and a significance test.
 - 4-6 hop chains and variable `max_loops`.
 - Stronger adversarial writes and higher noise density.
-- Long-context streaming latency and memory against a real KV cache.
+- Streaming latency and memory beyond the measured 32K range (128K-1M) and against a production serving stack.
 - A fused CUDA/Triton scan to replace the TorchScript loop.
 - Tuned, parameter-matched Transformer baselines at matched compute as well as parameters.
 - A larger real-code corpus with held-out files/repositories for Track 3B.
@@ -663,5 +672,5 @@ python run_experiment.py --steps 2 --code-steps 2  # smoke
 ---
 
 <p align="center">
-  <i>TriCore V7 — constant state, surprise-gated writes, causal delta memory, a vectorized latent loop, and native one-token streaming.</i>
+  <i>TriCore V9 — zero-F_seq training, constant state, surprise-gated writes, causal delta memory, a fused latent loop, and native one-token streaming.</i>
 </p>

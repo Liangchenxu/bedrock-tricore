@@ -15,13 +15,20 @@ def tricore_fused_scan(
     base_decay: torch.Tensor,
     fast_decay: torch.Tensor,
     fast_lr: torch.Tensor,
+    hop_matrices: torch.Tensor,
+    hop_weights: torch.Tensor,
     enable_surprise_gate: bool,
     enable_fast_weight: bool,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    enable_adaptive_loop: bool,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    High-Speed JIT Fused Scan:
-    Separates lightweight O(1) recurrent state evolution (Engine I + Engine II Hop-1)
-    from Engine III so that Multi-Hop Equilibrium Loop can execute in parallel chunks!
+    High-Speed JIT Fused Scan with zero ``F_seq`` materialization.
+
+    Engine I and Engine II evolve the O(1) recurrent state in causal order.
+    Engine III's fixed multi-hop re-query is fused into the same loop, using the
+    current ``F_mat`` for each timestep.  Only the fused memory read
+    ``[B, L, H * Dh]`` is stored; no ``[B, L, H, Dh, Dh]`` snapshot tensor is
+    allocated or stacked.
     """
     B, L, D = u_feat.shape
     H = Q.shape[2]
@@ -33,7 +40,7 @@ def tricore_fused_scan(
 
     h_list = torch.jit.annotate(list[torch.Tensor], [])
     r1_list = torch.jit.annotate(list[torch.Tensor], [])
-    f_snapshots = torch.jit.annotate(list[torch.Tensor], [])
+    mem_list = torch.jit.annotate(list[torch.Tensor], [])
     surprise_list = torch.jit.annotate(list[torch.Tensor], [])
 
     for t in range(L):
@@ -70,28 +77,53 @@ def tricore_fused_scan(
                 F_mat = eff_decay * F_mat + torch.matmul(eff_lr * synapse_err, prev_k.transpose(-1, -2))
 
             r_hop1 = torch.matmul(F_mat, q_t)
-            r1_list.append(r_hop1)
-            f_snapshots.append(F_mat)
+            if enable_adaptive_loop:
+                # Engine III: fixed multi-hop refinement using this timestep's
+                # F_mat.  This is identical to forward_step's recurrence.
+                r_accum = hop_weights[:, t, 0].view(B, 1, 1, 1) * r_hop1
+                r_curr = r_hop1
+                for step in range(hop_matrices.shape[0]):
+                    q_next = torch.nn.functional.normalize(
+                        r_curr + torch.matmul(hop_matrices[step], r_curr),
+                        p=2.0,
+                        dim=-2,
+                    )
+                    r_curr = torch.matmul(F_mat, q_next)
+                    r_accum = r_accum + hop_weights[
+                        :, t, step + 1
+                    ].view(B, 1, 1, 1) * r_curr
+                mem_list.append(r_accum)
+            else:
+                r1_list.append(r_hop1)
             prev_k = k_t
 
     h_seq = torch.stack(h_list, dim=1)
     surprise_trace = torch.cat(surprise_list, dim=1)
 
     if enable_fast_weight:
-        r1_seq = torch.stack(r1_list, dim=1)          # [B, L, H, Dh, 1]
-        F_seq = torch.stack(f_snapshots, dim=1)       # [B, L, H, Dh, Dh]
+        if enable_adaptive_loop:
+            mem_seq = torch.stack(mem_list, dim=1).squeeze(-1).reshape(
+                B, L, H * Dh
+            )
+        else:
+            mem_seq = torch.stack(r1_list, dim=1).squeeze(-1).reshape(
+                B, L, H * Dh
+            )
     else:
-        r1_seq = torch.zeros(B, L, H, Dh, 1, device=u_feat.device, dtype=u_feat.dtype)
-        F_seq = torch.zeros(B, 1, H, Dh, Dh, device=u_feat.device, dtype=u_feat.dtype)
+        mem_seq = torch.zeros(
+            B, L, H * Dh, device=u_feat.device, dtype=u_feat.dtype
+        )
 
-    return h_seq, r1_seq, F_seq, surprise_trace
+    return h_seq, mem_seq, surprise_trace
 
 
 class TriCoreBlock(nn.Module):
     """
-    TriCore V7: Hybrid JIT-Recurrent + Vectorized Multi-Hop Equilibrium Operator
+    TriCore V9: Hybrid JIT-Recurrent + Multi-Hop Equilibrium Operator
     with native O(1) per-token streaming inference.
-    Engine III executes completely in parallel across all L timesteps via batched tensor matmul!
+
+    Engine III's re-query is fused into the JIT scan, so training never
+    materializes the ``F_seq: [B, L, H, d_head, d_head]`` snapshot tensor.
     """
     def __init__(self, d_model: int = 128, n_heads: int = 4, d_head: int = 32, max_loops: int = 2):
         super().__init__()
@@ -297,9 +329,14 @@ class TriCoreBlock(nn.Module):
         base_decay = torch.sigmoid(self.base_decay_logit)
         fast_decay = torch.sigmoid(self.fast_decay_logit)
         fast_lr = torch.sigmoid(self.fast_lr_logit)
+        hop_matrices = self.hop_proj.view(
+            self.max_loops, H, Dh, Dh
+        )
 
-        # Step 1 & 2: Fast JIT Scan for O(1) State Evolution
-        h_seq, r1_seq, F_seq, surprise_trace = tricore_fused_scan(
+        # Steps 1-3: one fused JIT scan.  Engine III runs inside the causal
+        # loop with the current F_mat and returns only the memory read, never
+        # an F_seq snapshot tensor.
+        h_seq, mem_seq, surprise_trace = tricore_fused_scan(
             u_feat=u_feat,
             u_surp_bias=u_surp_bias,
             w_gate_logits=w_gate_logits,
@@ -309,26 +346,14 @@ class TriCoreBlock(nn.Module):
             base_decay=base_decay,
             fast_decay=fast_decay,
             fast_lr=fast_lr,
+            hop_matrices=hop_matrices,
+            hop_weights=hop_weights,
             enable_surprise_gate=enable_surprise_gate,
             enable_fast_weight=enable_fast_weight,
+            enable_adaptive_loop=enable_adaptive_loop,
         )
 
-        # Step 3: Vectorized Parallel Engine III (Multi-Hop Re-Query across all L tokens simultaneously!)
         if enable_fast_weight:
-            if enable_adaptive_loop:
-                r_accum = hop_weights[:, :, 0].view(B, L, 1, 1, 1) * r1_seq
-                r_curr = r1_seq
-                for step in range(self.max_loops):
-                    q_next = F.normalize(
-                        r_curr + torch.matmul(self.hop_proj[step], r_curr),
-                        p=2.0,
-                        dim=-2,
-                    )
-                    r_curr = torch.matmul(F_seq, q_next)  # Batched 5D MatMul across entire sequence L!
-                    r_accum = r_accum + hop_weights[:, :, step + 1].view(B, L, 1, 1, 1) * r_curr
-                mem_seq = r_accum.squeeze(-1).reshape(B, L, H * Dh)
-            else:
-                mem_seq = r1_seq.squeeze(-1).reshape(B, L, H * Dh)
             z = h_seq + self.proj_out(mem_seq)
         else:
             z = h_seq

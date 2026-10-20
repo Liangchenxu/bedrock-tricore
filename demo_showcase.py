@@ -14,7 +14,7 @@ import torch
 from tricore import TriCoreLM
 
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 VOCAB_SIZE = 64
 D_MODEL = 128
 D_FAST = 32

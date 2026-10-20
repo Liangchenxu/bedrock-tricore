@@ -1,0 +1,453 @@
+{
+  "version": "1.2.0",
+  "device": "cuda",
+  "runtime_seconds": 475.59111490000214,
+  "track4a_seconds": 474.19051949999994,
+  "track4b_seconds": 1.4005709999983083,
+  "protocol": {
+    "seeds": [
+      42,
+      100,
+      2026
+    ],
+    "steps": 350,
+    "batch_size": 64,
+    "learning_rate": 0.003,
+    "d_model": 64,
+    "d_fast": 16,
+    "n_chains": 4,
+    "n_queries": 4,
+    "noise_len": 8,
+    "ood_multiplier": 4,
+    "ood_noise_len": 32,
+    "eval_batches": 5,
+    "lengths": [
+      128,
+      512,
+      2048,
+      8192,
+      16384,
+      32768
+    ]
+  },
+  "track4a": {
+    "protocol": {
+      "num_kv_pairs": 4,
+      "num_queries": 4,
+      "noise_len": 8,
+      "ood_noise_len": 32,
+      "d_model": 64,
+      "d_fast": 16,
+      "max_loops": 2,
+      "chance_level": 25.0
+    },
+    "summary": [
+      {
+        "name": "TriCore Full",
+        "params": 56655,
+        "in_mean": 100.0,
+        "in_std": 0.0,
+        "ood_mean": 100.0,
+        "ood_std": 0.0,
+        "train_mean": 59.59832859999975,
+        "seeds": [
+          42,
+          100,
+          2026
+        ],
+        "per_seed": [
+          {
+            "seed": 42,
+            "in_acc": 100.0,
+            "ood_acc": 100.0
+          },
+          {
+            "seed": 100,
+            "in_acc": 100.0,
+            "ood_acc": 100.0
+          },
+          {
+            "seed": 2026,
+            "in_acc": 100.0,
+            "ood_acc": 100.0
+          }
+        ]
+      },
+      {
+        "name": "No Engine I: Surprise Gate",
+        "params": 56655,
+        "in_mean": 5.651041666666667,
+        "in_std": 0.19661027175184245,
+        "ood_mean": 5.546875,
+        "ood_std": 0.8267972847076851,
+        "train_mean": 48.521682666668006,
+        "seeds": [
+          42,
+          100,
+          2026
+        ],
+        "per_seed": [
+          {
+            "seed": 42,
+            "in_acc": 5.625,
+            "ood_acc": 4.921875
+          },
+          {
+            "seed": 100,
+            "in_acc": 5.46875,
+            "ood_acc": 5.234375
+          },
+          {
+            "seed": 2026,
+            "in_acc": 5.859375,
+            "ood_acc": 6.484375000000001
+          }
+        ]
+      },
+      {
+        "name": "No Engine II: Fast-Weight",
+        "params": 56655,
+        "in_mean": 5.546875,
+        "in_std": 0.34053897996411514,
+        "ood_mean": 5.3125,
+        "ood_std": 0.9472152853892293,
+        "train_mean": 9.394738466665634,
+        "seeds": [
+          42,
+          100,
+          2026
+        ],
+        "per_seed": [
+          {
+            "seed": 42,
+            "in_acc": 5.703125,
+            "ood_acc": 4.765625
+          },
+          {
+            "seed": 100,
+            "in_acc": 5.15625,
+            "ood_acc": 4.765625
+          },
+          {
+            "seed": 2026,
+            "in_acc": 5.78125,
+            "ood_acc": 6.406249999999999
+          }
+        ]
+      },
+      {
+        "name": "No Engine III: Adaptive Loop",
+        "params": 56655,
+        "in_mean": 23.411458333333332,
+        "in_std": 1.0778230253424415,
+        "ood_mean": 23.541666666666668,
+        "ood_std": 2.7336308511224288,
+        "train_mean": 26.022535533331393,
+        "seeds": [
+          42,
+          100,
+          2026
+        ],
+        "per_seed": [
+          {
+            "seed": 42,
+            "in_acc": 24.21875,
+            "ood_acc": 24.453125
+          },
+          {
+            "seed": 100,
+            "in_acc": 23.828125,
+            "ood_acc": 25.703125
+          },
+          {
+            "seed": 2026,
+            "in_acc": 22.1875,
+            "ood_acc": 20.46875
+          }
+        ]
+      },
+      {
+        "name": "Vanilla Transformer 2-Layer",
+        "params": 83456,
+        "in_mean": 25.078125,
+        "in_std": 0.4752158226795464,
+        "ood_mean": 22.239583333333332,
+        "ood_std": 3.956191169257158,
+        "train_mean": 2.008949733331974,
+        "seeds": [
+          42,
+          100,
+          2026
+        ],
+        "per_seed": [
+          {
+            "seed": 42,
+            "in_acc": 24.84375,
+            "ood_acc": 23.203125
+          },
+          {
+            "seed": 100,
+            "in_acc": 25.624999999999996,
+            "ood_acc": 17.890625
+          },
+          {
+            "seed": 2026,
+            "in_acc": 24.765625,
+            "ood_acc": 25.624999999999996
+          }
+        ]
+      }
+    ],
+    "runs": [
+      {
+        "name": "TriCore Full",
+        "seed": 42,
+        "params": 56655,
+        "train_loss": 0.00466030603274703,
+        "in_loss": 0.004489328432828188,
+        "in_acc": 100.0,
+        "ood_loss": 0.005545107554644347,
+        "ood_acc": 100.0,
+        "train_time": 60.29608829999779
+      },
+      {
+        "name": "No Engine I: Surprise Gate",
+        "seed": 42,
+        "params": 56655,
+        "train_loss": 3.0015885829925537,
+        "in_loss": 3.0008269786834716,
+        "in_acc": 5.625,
+        "ood_loss": 3.001431131362915,
+        "ood_acc": 4.921875,
+        "train_time": 49.98746460000257
+      },
+      {
+        "name": "No Engine II: Fast-Weight",
+        "seed": 42,
+        "params": 56655,
+        "train_loss": 3.001615285873413,
+        "in_loss": 3.0006057262420653,
+        "in_acc": 5.703125,
+        "ood_loss": 3.002290439605713,
+        "ood_acc": 4.765625,
+        "train_time": 9.676884900000005
+      },
+      {
+        "name": "No Engine III: Adaptive Loop",
+        "seed": 42,
+        "params": 56655,
+        "train_loss": 1.9405364990234375,
+        "in_loss": 1.9251160144805908,
+        "in_acc": 24.21875,
+        "ood_loss": 2.0674089908599855,
+        "ood_acc": 24.453125,
+        "train_time": 27.613423599999805
+      },
+      {
+        "name": "Vanilla Transformer 2-Layer",
+        "seed": 42,
+        "params": 83456,
+        "train_loss": 1.5327966213226318,
+        "in_loss": 1.5314220190048218,
+        "in_acc": 24.84375,
+        "ood_loss": 2.017484998703003,
+        "ood_acc": 23.203125,
+        "train_time": 1.989216399997531
+      },
+      {
+        "name": "TriCore Full",
+        "seed": 100,
+        "params": 56655,
+        "train_loss": 0.004697490017861128,
+        "in_loss": 0.0046238919720053675,
+        "in_acc": 100.0,
+        "ood_loss": 0.012479978986084462,
+        "ood_acc": 100.0,
+        "train_time": 56.39317860000301
+      },
+      {
+        "name": "No Engine I: Surprise Gate",
+        "seed": 100,
+        "params": 56655,
+        "train_loss": 3.000178098678589,
+        "in_loss": 3.0014527320861815,
+        "in_acc": 5.46875,
+        "ood_loss": 2.999539613723755,
+        "ood_acc": 5.234375,
+        "train_time": 50.188377200000104
+      },
+      {
+        "name": "No Engine II: Fast-Weight",
+        "seed": 100,
+        "params": 56655,
+        "train_loss": 2.9999148845672607,
+        "in_loss": 3.0009031295776367,
+        "in_acc": 5.15625,
+        "ood_loss": 3.000107765197754,
+        "ood_acc": 4.765625,
+        "train_time": 10.291748900002858
+      },
+      {
+        "name": "No Engine III: Adaptive Loop",
+        "seed": 100,
+        "params": 56655,
+        "train_loss": 1.7521690130233765,
+        "in_loss": 1.7505844116210938,
+        "in_acc": 23.828125,
+        "ood_loss": 1.8046891927719115,
+        "ood_acc": 25.703125,
+        "train_time": 27.621327199994994
+      },
+      {
+        "name": "Vanilla Transformer 2-Layer",
+        "seed": 100,
+        "params": 83456,
+        "train_loss": 1.7975468635559082,
+        "in_loss": 1.7966373920440675,
+        "in_acc": 25.624999999999996,
+        "ood_loss": 3.2209283351898192,
+        "ood_acc": 17.890625,
+        "train_time": 1.980806899999152
+      },
+      {
+        "name": "TriCore Full",
+        "seed": 2026,
+        "params": 56655,
+        "train_loss": 0.0050170039758086205,
+        "in_loss": 0.00511435754597187,
+        "in_acc": 100.0,
+        "ood_loss": 0.015037322416901588,
+        "ood_acc": 100.0,
+        "train_time": 62.105718899998465
+      },
+      {
+        "name": "No Engine I: Surprise Gate",
+        "seed": 2026,
+        "params": 56655,
+        "train_loss": 3.0006844997406006,
+        "in_loss": 2.9975470542907714,
+        "in_acc": 5.859375,
+        "ood_loss": 2.9992236137390136,
+        "ood_acc": 6.484375000000001,
+        "train_time": 45.389206200001354
+      },
+      {
+        "name": "No Engine II: Fast-Weight",
+        "seed": 2026,
+        "params": 56655,
+        "train_loss": 3.000511646270752,
+        "in_loss": 2.9978840351104736,
+        "in_acc": 5.78125,
+        "ood_loss": 2.9989967823028563,
+        "ood_acc": 6.406249999999999,
+        "train_time": 8.215581599994039
+      },
+      {
+        "name": "No Engine III: Adaptive Loop",
+        "seed": 2026,
+        "params": 56655,
+        "train_loss": 2.3336381912231445,
+        "in_loss": 2.28595609664917,
+        "in_acc": 22.1875,
+        "ood_loss": 2.362812376022339,
+        "ood_acc": 20.46875,
+        "train_time": 22.83285579999938
+      },
+      {
+        "name": "Vanilla Transformer 2-Layer",
+        "seed": 2026,
+        "params": 83456,
+        "train_loss": 1.5705149173736572,
+        "in_loss": 1.569189691543579,
+        "in_acc": 24.765625,
+        "ood_loss": 1.88368661403656,
+        "ood_acc": 25.624999999999996,
+        "train_time": 2.0568258999992395
+      }
+    ]
+  },
+  "track4b": {
+    "device": "cuda",
+    "lengths": [
+      128,
+      512,
+      2048,
+      8192,
+      16384,
+      32768
+    ],
+    "state_config": {
+      "d_model": 128,
+      "n_heads": 4,
+      "d_head": 32
+    },
+    "baseline_config": {
+      "n_layers": 2,
+      "d_model": 128,
+      "n_heads": 4,
+      "d_head": 32
+    },
+    "rows": [
+      {
+        "length": 128,
+        "state_tensor_bytes": 17408,
+        "state_alloc_bytes": 17408,
+        "cache_tensor_bytes": 262144,
+        "cache_alloc_bytes": 262144,
+        "tri_ms_per_token": 2.4479562500800967,
+        "transformer_ms_per_token": 1.47359375000633,
+        "reduction": 15.058823529411764
+      },
+      {
+        "length": 512,
+        "state_tensor_bytes": 17408,
+        "state_alloc_bytes": 17408,
+        "cache_tensor_bytes": 1048576,
+        "cache_alloc_bytes": 1048576,
+        "tri_ms_per_token": 1.8040249999558,
+        "transformer_ms_per_token": 1.0493531251540844,
+        "reduction": 60.23529411764706
+      },
+      {
+        "length": 2048,
+        "state_tensor_bytes": 17408,
+        "state_alloc_bytes": 17408,
+        "cache_tensor_bytes": 4194304,
+        "cache_alloc_bytes": 4718592,
+        "tri_ms_per_token": 1.7559500001880224,
+        "transformer_ms_per_token": 1.2743656250222557,
+        "reduction": 240.94117647058823
+      },
+      {
+        "length": 8192,
+        "state_tensor_bytes": 17408,
+        "state_alloc_bytes": 17408,
+        "cache_tensor_bytes": 16777216,
+        "cache_alloc_bytes": 16777216,
+        "tri_ms_per_token": 1.754706250039817,
+        "transformer_ms_per_token": 3.0109374999938154,
+        "reduction": 963.7647058823529
+      },
+      {
+        "length": 16384,
+        "state_tensor_bytes": 17408,
+        "state_alloc_bytes": 17408,
+        "cache_tensor_bytes": 33554432,
+        "cache_alloc_bytes": 33554432,
+        "tri_ms_per_token": 2.046690625093106,
+        "transformer_ms_per_token": 4.993100000092454,
+        "reduction": 1927.5294117647059
+      },
+      {
+        "length": 32768,
+        "state_tensor_bytes": 17408,
+        "state_alloc_bytes": 17408,
+        "cache_tensor_bytes": 67108864,
+        "cache_alloc_bytes": 67108864,
+        "tri_ms_per_token": 1.9394312498661748,
+        "transformer_ms_per_token": 9.5723468750748,
+        "reduction": 3855.0588235294117
+      }
+    ]
+  }
+}

@@ -13,7 +13,8 @@ from tricore.model import tricore_fused_scan
 def _reference_scan(
     u_feat, u_surp_bias, w_gate_logits, Q, K, V,
     base_decay, fast_decay, fast_lr,
-    enable_surprise_gate, enable_fast_weight,
+    hop_matrices, hop_weights,
+    enable_surprise_gate, enable_fast_weight, enable_adaptive_loop,
 ):
     B, L, D = u_feat.shape
     H = Q.shape[2]
@@ -21,7 +22,7 @@ def _reference_scan(
     h = torch.zeros(B, D, dtype=u_feat.dtype)
     F_mat = torch.zeros(B, H, Dh, Dh, dtype=u_feat.dtype)
     prev_k = torch.zeros(B, H, Dh, 1, dtype=u_feat.dtype)
-    h_list, r1_list, f_list, surprise_list = [], [], [], []
+    h_list, mem_list, surprise_list = [], [], []
 
     for t in range(L):
         u_t = u_feat[:, t, :]
@@ -55,22 +56,33 @@ def _reference_scan(
                     eff_lr * synapse_err, prev_k.transpose(-1, -2)
                 )
             r1 = torch.matmul(F_mat, q_t)
-            r1_list.append(r1)
-            f_list.append(F_mat)
+            if enable_adaptive_loop:
+                r_accum = hop_weights[:, t, 0].view(B, 1, 1, 1) * r1
+                r_curr = r1
+                for step in range(hop_matrices.shape[0]):
+                    q_next = torch.nn.functional.normalize(
+                        r_curr + torch.matmul(hop_matrices[step], r_curr),
+                        p=2.0, dim=-2,
+                    )
+                    r_curr = torch.matmul(F_mat, q_next)
+                    r_accum = r_accum + hop_weights[
+                        :, t, step + 1
+                    ].view(B, 1, 1, 1) * r_curr
+                mem_list.append(r_accum)
+            else:
+                mem_list.append(r1)
             prev_k = k_t
 
     h_seq = torch.stack(h_list, dim=1)
     surprise_trace = torch.cat(surprise_list, dim=1)
     if enable_fast_weight:
-        r1_seq = torch.stack(r1_list, dim=1)
-        F_seq = torch.stack(f_list, dim=1)
+        mem_seq = torch.stack(mem_list, dim=1).squeeze(-1).reshape(B, L, H * Dh)
     else:
-        r1_seq = torch.zeros(B, L, H, Dh, 1, dtype=u_feat.dtype)
-        F_seq = torch.zeros(B, 1, H, Dh, Dh, dtype=u_feat.dtype)
-    return h_seq, r1_seq, F_seq, surprise_trace
+        mem_seq = torch.zeros(B, L, H * Dh, dtype=u_feat.dtype)
+    return h_seq, mem_seq, surprise_trace
 
 
-def test_jit_scan_matches_reference_for_ablation_flags():
+def test_jit_scan_matches_reference_without_f_seq():
     torch.manual_seed(7)
     B, L, D, H, Dh = 2, 9, 8, 2, 4
     u_feat = torch.randn(B, L, D)
@@ -82,32 +94,66 @@ def test_jit_scan_matches_reference_for_ablation_flags():
     base_decay = torch.sigmoid(torch.randn(D))
     fast_decay = torch.sigmoid(torch.randn(1, H, 1, 1))
     fast_lr = torch.sigmoid(torch.randn(1, H, 1, 1))
+    hop_matrices = torch.randn(2, H, Dh, Dh) * 0.02
+    hop_weights = torch.softmax(torch.randn(B, L, 3), dim=-1)
 
-    for surprise_gate, fast_weight in [
-        (True, True),
-        (False, True),
-        (True, False),
-        (False, False),
+    for surprise_gate, fast_weight, adaptive_loop in [
+        (True, True, True),
+        (False, True, True),
+        (True, False, True),
+        (False, False, True),
+        (True, True, False),
     ]:
         jit_out = tricore_fused_scan(
             u_feat, u_surp_bias, w_gate_logits, Q, K, V,
             base_decay, fast_decay, fast_lr,
-            surprise_gate, fast_weight,
+            hop_matrices, hop_weights,
+            surprise_gate, fast_weight, adaptive_loop,
         )
         ref_out = _reference_scan(
             u_feat, u_surp_bias, w_gate_logits, Q, K, V,
             base_decay, fast_decay, fast_lr,
-            surprise_gate, fast_weight,
+            hop_matrices, hop_weights,
+            surprise_gate, fast_weight, adaptive_loop,
         )
-        assert len(jit_out) == 4
+        assert len(jit_out) == 3
         for jit_tensor, ref_tensor in zip(jit_out, ref_out):
             assert jit_tensor.shape == ref_tensor.shape, (
-                f"shape mismatch for flags=({surprise_gate}, {fast_weight}): "
-                f"{jit_tensor.shape} vs {ref_tensor.shape}"
+                f"shape mismatch for flags=({surprise_gate}, {fast_weight}, "
+                f"{adaptive_loop}): {jit_tensor.shape} vs {ref_tensor.shape}"
             )
             assert torch.allclose(jit_tensor, ref_tensor, atol=1e-6, rtol=1e-5), (
-                f"JIT/reference mismatch for flags=({surprise_gate}, {fast_weight})"
+                f"JIT/reference mismatch for flags=({surprise_gate}, "
+                f"{fast_weight}, {adaptive_loop})"
             )
+
+
+def test_forward_matches_forward_step_without_f_seq():
+    torch.manual_seed(11)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = TriCoreLM(
+        vocab_size=64, d_model=32, n_layers=1, d_fast=8, max_loops=2
+    ).to(device).eval()
+    idx = torch.randint(0, 64, (2, 12), device=device)
+
+    with torch.no_grad():
+        full_logits, full_surprise = model(idx)
+        states = model.init_state(idx.shape[0], device, torch.float32)
+        step_logits = []
+        step_surprises = []
+        for t in range(idx.shape[1]):
+            logits, surprise, states = model.forward_step(
+                idx[:, t], states, t
+            )
+            step_logits.append(logits)
+            step_surprises.append(surprise.squeeze(-1))
+        step_logits = torch.stack(step_logits, dim=1)
+        step_surprises = torch.stack(step_surprises, dim=1)
+
+    logit_error = (full_logits - step_logits).abs().max().item()
+    surprise_error = (full_surprise - step_surprises).abs().max().item()
+    assert logit_error < 1e-6, f"logit error {logit_error:.3e}"
+    assert surprise_error < 1e-6, f"surprise error {surprise_error:.3e}"
 
 
 def test_contextual_code_lm_task_and_backward():
@@ -140,6 +186,7 @@ def test_contextual_code_lm_task_and_backward():
 
 
 if __name__ == "__main__":
-    test_jit_scan_matches_reference_for_ablation_flags()
+    test_jit_scan_matches_reference_without_f_seq()
+    test_forward_matches_forward_step_without_f_seq()
     test_contextual_code_lm_task_and_backward()
-    print("[PASS] V6 vectorized scan equivalence and causal bytecode LM checks passed.")
+    print("[PASS] V9 zero-F_seq fused scan equivalence and causal bytecode LM checks passed.")

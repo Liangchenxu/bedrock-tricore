@@ -22,6 +22,8 @@ Thumbs.db
 
 # Local logs and temporary experiment captures
 *.log
+test_v5.out
+v9_run.status
 _v5_import*.txt
 _v5_smoke*.txt
 
@@ -29,3 +31,4 @@ _v5_smoke*.txt
 results/*
 !results/BENCHMARK_REPORT.md
 !results/*.png
+!results/V9_METRICS.json
