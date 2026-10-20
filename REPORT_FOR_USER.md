@@ -1,8 +1,8 @@
-# TriCore V6 完成报告
+# TriCore V7 完成报告
 
 **日期：** 2026-10-20  
-**版本：** `tricore-arch` 0.6.0  
-**状态：** V6 双赛道实验完成；向量化多跳扫描与因果字节码解引用已接入；MIT 开源套件就绪  
+**版本：** `tricore-arch` 1.0.0  
+**状态：** V7 完成；原生 O(1) 流式推理、3-Hop 链式推理、真实 Python 源码 Held-Out LM 已接入；V6 双赛道数据完整保留  
 **实测报告：** `results/BENCHMARK_REPORT.md`  
 **图表：** `results/tricore_vs_transformer.png`  
 **运行设备：** CUDA
@@ -11,13 +11,13 @@
 
 ## 0. 一页结论
 
-V6 在不改变 V4/V5 数学公式、参数量和 O(1) 状态结构的前提下，完成了三件事：
+V7 在不改变 V6 数学公式、权重命名和 V6 双赛道数据的前提下，完成了三件事：
 
-1. **运行时：** 把 O(1) 状态演化保留在 JIT 循环中，把 Engine III 的多跳重查询改为 `F_seq: [B, L, H, d_head, d_head]` 上的批量 5-D `matmul`。Python 只循环固定的 `max_loops`，不再逐 token 循环。Full 训练 500 步的 V6 / V5 / V4 墙钟对比见 §1。
-2. **第二赛道：** 把 V5 的 `EQ` 语句改为因果字节码 `[LET, alias, var, SEMI]`、`[ALIAS, var, lit, SEMI]`、`[NOP, var, SEMI, SEMI]`、`[RET, alias, lit, SEMI]`，并把解引用目标移到 `pos + 1` 的返回别名位置，强制 `alias_i -> var_i -> lit_i` 两级指针解析。PPL 与解引用准确率见 §3。
-3. **开源交付：** 根目录已有 `LICENSE`（MIT）、`.gitignore`、`pyproject.toml`；README 与 SPEC 已同步为 V6 实测数据；实验报告和 2×2 图表已重新生成。
+1. **原生流式推理：** 为 `TriCoreBlock` / `TriCoreLM` 增加 `init_state` 与 `forward_step`，持久状态严格为 `(h, F_mat, prev_k)`，不携带训练期的 `F_seq`。完整序列与逐 token 解码的最大 logit 误差 **5.96e-07**，最大 surprise 误差 **1.19e-07**；状态恒为 **17,408 bytes = 17.00 KiB / 样本**；4,096 步解码实测 **2.160 ms/token**。见 §4.1。
+2. **Track 3A（3-Hop 链式推理）：** 新增 `generate_3hop_recall_batch`，强制 `k_q -> m1_q -> m2_q -> v_q`。Full `max_loops=2` 达到 **100.00% 域内 / 100.00% 四倍间隔外推**；`max_loops=1` 的两跳上限只有 **25.39% / 23.91%**，2 层 Transformer 为 **23.83% / 23.44%**。见 §4.2。
+3. **Track 3B（真实 Python 源码 Held-Out LM）：** 新增 `load_real_python_corpus_batches`，直接读取本仓库 `tricore/model.py`、`tricore/tasks.py`、`run_experiment.py` 的 ASCII 字节流，最后 15% 作为严格未见后缀。TriCore **PPL 18.616 / next-byte acc 41.47%**；参数匹配 Transformer **19.428 / 28.15%**。见 §4.3。
 
-**必须同时看到的限制：** 两个赛道都是单 seed 合成任务。Track 1 的 Full 达到 100%/100%，但 No-Engine-I 本次为 **5.55%/4.14%**，跌到随机水平，和 V5 的 91.88%/84.14% 不同；公式没变，向量化多跳路径改变了单 seed 优化轨迹，不能把任一结果当作 Engine I 的普适结论。Track 2 的 **100.00%** 是在封闭、确定性的合成字节码语法上取得的，没有 held-out 模板，不能解读为“理解了真实代码”或“通用语言建模已被证明”。
+**必须同时看到的限制：** 全部结果仍是单 seed。Track 3A 是 4 链、4 查询、12 干扰 token 的合成任务；Track 3B 只使用本仓库的小型源码后缀，不是大规模人类代码基准。Full 在 Track 3A 的 100.00% 不能外推为通用推理能力，Track 3B 的 PPL 优势也不能外推为吞吐或调参后 Transformer 的全面优势；TriCore 在该训练循环中约慢 **38×**（57.7 s vs 1.5 s）。
 
 ---
 
@@ -91,7 +91,43 @@ V6 修正了 V5 的关键缺陷：V5 在 `[LET, var_i, EQ, lit_i]` 中把答案 
 
 ---
 
-## 4. 推理状态与 KV cache 对比
+## 4. V7 原生流式与 Track 3 实测
+
+### 4.1 原生 O(1) 流式推理
+
+| 检查项 | 结果 |
+| :--- | :---: |
+| `forward` 与 `forward_step` 最大绝对 logit 误差 | **5.960e-07** |
+| 最大绝对 surprise 误差 | **1.192e-07** |
+| 流式延迟（batch=1，4,096 步） | **2.160 ms/token** |
+| 持久状态 / 样本（FP32） | **17,408 bytes = 17.00 KiB** |
+
+状态大小在 `L=128、512、2,048、4,096` 时均为 **17,408 bytes**。`forward_step` 只携带 `(h, F_mat, prev_k)`，不创建 `F_seq`；训练路径仍会物化 `F_seq`，因此 O(1) 只描述持久推理状态，不描述训练激活或吞吐。
+
+### 4.2 Track 3A：3-Hop 链式推理
+
+**协议：** 450 步，batch 64，`lr=3e-3`，seed 42；4 条链、4 个查询、12 个干扰 token；域内 `noise_len=12`，四倍间隔 `noise_len=48`；只在查询 key 位置计算准确率，随机基线 25%。
+
+| 模型 | 参数量 | 域内验证 loss | 域内 3-hop 准确率 | 四倍间隔外推 | 训练耗时 |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **TriCore Full（1 层，`max_loops=2`）** | 207,503 | **0.0010** | **100.00%** | **100.00%** | 66.4 s |
+| TriCore（`max_loops=1`，两跳上限） | 203,278 | 1.8395 | 25.39% | 23.91% | 62.8 s |
+| Vanilla Transformer（2 层） | 297,984 | 2.2188 | 23.83% | 23.44% | 16.7 s |
+
+**解读：** 第二次 refinement 真正完成了第三跳；去掉它后域内准确率从 **100.00%** 跌到 **25.39%**（随机水平），差距 **74.61 个百分点**。2 层 Transformer 在该预算下仍接近随机。这是合成 3-hop 任务，不是通用推理基准。
+
+### 4.3 Track 3B：真实 Python 源码 Held-Out LM
+
+**协议：** 300 步，batch 32，`lr=3e-3`，seed 42；语料为本仓库 `tricore/model.py`、`tricore/tasks.py`、`run_experiment.py` 的 ASCII 字节流（`vocab_size=128`）；前 85% 训练，最后 15% 为严格 held-out 后缀，训练窗口不跨越切分点。
+
+| 模型 | 参数量 | Held-out loss | Held-out PPL | Next-byte 准确率 | 训练耗时 |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **TriCore Full（1 层）** | 223,887 | **2.9240** | **18.616** | **41.47%** | 57.7 s |
+| Vanilla Transformer（1 层，参数匹配） | 218,448 | 2.9667 | 19.428 | 28.15% | 1.5 s |
+
+**解读：** 在接近匹配的参数量下（223,887 vs 218,448），TriCore 的 held-out loss、PPL 和 next-byte 准确率均更好；但训练耗时约 **38×**，因此这是质量/预算观察，不是吞吐优势。语料只是本仓库的小型后缀，不能据此宣称人类代码理解能力。
+
+### 4.4 推理状态与 KV cache 对比
 
 单样本、FP32、`D=128`、`H=4`、`d_head=32`、Transformer `n_layers=2`。
 
@@ -113,17 +149,19 @@ TriCore 单核状态为 `h`（128 floats）+ `F_mat`（4,096 floats）+ `prev_k`
 | :--- | :---: | :--- |
 | `LICENSE` | ✅ 已创建 | MIT License |
 | `.gitignore` | ✅ 已创建 | Python 缓存、虚拟环境、编辑器文件；保留 `results/` 报告与 PNG |
-| `pyproject.toml` | ✅ 已创建 | `tricore-arch` 0.6.0，Python ≥3.10，torch/numpy/matplotlib，MIT |
-| `README.md` | ✅ 已更新 | V6 标题、向量化多跳、因果字节码、双赛道实测表、限制、复现命令、不变量 |
-| `SPEC_V2.md` | ✅ 已更新 | V6 JIT 四元组合约、向量化 Engine III、状态核算、任务令牌布局、协议、实测记录 |
+| `pyproject.toml` | ✅ 已更新 | `tricore-arch` 1.0.0，Python ≥3.10，torch/numpy/matplotlib，MIT |
+| `README.md` | ✅ 已更新 | V7 标题、原生流式 API、V6 双赛道保留、Track 3A/3B、限制、复现命令、不变量 |
+| `SPEC_V2.md` | ✅ 已更新 | V7 流式契约、V6 JIT 四元组合约、向量化 Engine III、状态核算、任务布局、协议、实测记录 |
 | `requirements.txt` | ✅ 已存在 | `torch>=2.0`、`numpy>=1.24`、`matplotlib>=3.7` |
-| `tricore/__init__.py` | ✅ 已更新 | 导出 `TriCoreBlock`、`TriCoreLM`、`BaselineTransformerLM` 与两个任务生成器 |
-| `tricore/model.py` | ✅ 已更新 | `tricore_fused_scan`、双模型 |
-| `tricore/tasks.py` | ✅ 已更新 | 2-Hop MQAR + 因果字节码 Contextual Code LM |
+| `tricore/__init__.py` | ✅ 已更新 | 导出 block/LM/baseline 与全部任务加载器 |
+| `tricore/model.py` | ✅ 已更新 | `tricore_fused_scan`、双模型、`init_state` / `forward_step` 流式接口 |
+| `tricore/tasks.py` | ✅ 已更新 | 2-Hop MQAR + 因果字节码 + 3-Hop 召回 + 真实 Python 源码 held-out 字节流 |
 | `tests/test_sanity.py` | ✅ 已存在 | 前向/反向/形状/梯度流 |
 | `tests/test_v5.py` | ✅ 已创建 | JIT 四元组对 Python 参考的四组 scan flag 等价性 + 因果字节码形状/反向 |
-| `run_experiment.py` | ✅ 已更新 | 双赛道、Track 1 五组消融、grad clipping、报告与 2×2 图 |
-| `results/BENCHMARK_REPORT.md` | ✅ 已生成 | 本次 V6 实测报告 |
+| `tests/test_v7_streaming.py` | ✅ 已创建 | 流式等价、17 KiB 恒定状态、3-Hop/真实语料梯度流 |
+| `run_experiment.py` | ✅ 已更新 | V6 双赛道、Track 1 五组消融、grad clipping、报告与 2×2 图 |
+| `run_v7_benchmark.py` | ✅ 已创建 | 仅运行 V7 流式检查与 Track 3，不重跑 V6 |
+| `results/BENCHMARK_REPORT.md` | ✅ 已生成 | V6 表格保留 + V7 流式/Track 3 实测 |
 | `results/tricore_vs_transformer.png` | ✅ 已生成 | 2×2 对比图 |
 | `REPORT_FOR_USER.md` | ✅ 本文件 | 完整交付说明 |
 
@@ -143,8 +181,11 @@ python run_experiment.py --steps 2 --code-steps 2   # 可选快速冒烟
 # 安装
 python -m pip install -e .
 
-# 全量双赛道实验（约数分钟；生成报告与图）
+# 全量 V6 双赛道实验（生成报告与图）
 python run_experiment.py
+
+# V7 流式检查 + Track 3A/3B（保留 V6 表格）
+python run_v7_benchmark.py
 
 # 只做快速冒烟
 python run_experiment.py --steps 2 --code-steps 2
@@ -152,20 +193,23 @@ python run_experiment.py --steps 2 --code-steps 2
 # 测试
 python -m pytest -q
 python tests/test_v5.py
+python tests/test_v7_streaming.py
 ```
 
 **关键文件：**
 
-- `tricore/model.py`：`@torch.jit.script tricore_fused_scan`（四元组返回）、向量化 5-D 多跳 `TriCoreBlock`、`TriCoreLM`、`BaselineTransformerLM`
-- `tricore/tasks.py`：2-Hop MQAR 与因果字节码 `generate_contextual_code_lm_batch`
+- `tricore/model.py`：`@torch.jit.script tricore_fused_scan`（四元组返回）、向量化 5-D 多跳 `TriCoreBlock`、`TriCoreLM`、`BaselineTransformerLM`、`init_state` / `forward_step`
+- `tricore/tasks.py`：2-Hop MQAR、因果字节码 `generate_contextual_code_lm_batch`、3-Hop `generate_3hop_recall_batch`、真实源码 `load_real_python_corpus_batches`
 - `run_experiment.py`：Track 1 五组消融、Track 2 两模型、V6 计时、cache 核算、Markdown 报告、matplotlib 2×2 图
+- `run_v7_benchmark.py`：流式等价/延迟/状态核算、Track 3A 三模型、Track 3B 两模型，并追加报告
 - `tests/test_v5.py`：JIT 与 Python 参考在四种 `enable_surprise_gate` × `enable_fast_weight` 组合下对 `h_seq`、`r1_seq`、`F_seq`、`surprise_trace` 的 `allclose` 等价性；`TriCoreLM` 前向/反向；因果字节码的形状、`pos + 1` mask、反向梯度检查
+- `tests/test_v7_streaming.py`：流式等价、17,408 bytes 恒定状态、3-Hop/真实语料形状与梯度检查；完整套件 6 passed
 
 ---
 
-## 7. 结论：V6 到底证明了什么
+## 7. 结论：V7 到底证明了什么
 
-### 已证明（在所述合成任务与预算内）
+### 已证明（在所述任务与预算内）
 
 1. **Full TriCore 能完成 2-Hop 链式联想召回**，并在 4× 对抗噪声间隔外推下保持 100.00%。
 2. **Engine II 和 Engine III 是该任务的关键**：去掉快权重或去掉隐空间重查询都会跌到随机水平附近。
@@ -173,27 +217,30 @@ python tests/test_v5.py
 4. **V6 把多跳重查询从逐 token 循环改成跨全部位置的一次批量 5-D `matmul`**，保持公式等价；状态递归仍是串行，不能把它描述成并行前缀扫描或 kernel 级优化。
 5. **O(1) 状态核算是真实的**：17.00 KiB 与序列长度无关，32K 时相对 2 层 KV cache 为 3,855.1×。
 6. **第二赛道管线可运行**：TriCore 在因果字节码任务上 PPL 3.17、解引用 100.00%；2 层 Transformer 为 3.56 / 19.63%，接近 16.67% 随机水平。这证明封闭语法上的两级指针查找可学习，不证明真实代码理解。
+7. **V7 流式路径与完整前向等价**：最大 logit 误差 5.96e-07，持久状态恒为 17,408 bytes，4,096 步实测 2.160 ms/token；训练期仍使用 `F_seq`。
+8. **Track 3A 证明第二次 refinement 是必要的**：Full `max_loops=2` 为 100.00%/100.00%，`max_loops=1` 只有 25.39%/23.91%，差 74.61 个百分点；2 层 Transformer 为 23.83%/23.44%。
+9. **Track 3B 在真实源码的后缀上完成了 held-out 比较**：TriCore 223,887 参数达到 PPL 18.616 / 41.47%，参数匹配 Transformer 218,448 参数为 19.428 / 28.15%；TriCore 训练慢约 38×，且语料仅为本仓库源码。
 
 ### 未证明 / 不应宣称
 
-- 自然语言、真实代码、推理或通用序列建模能力。
-- 对调参后 Transformer 的全面优势；Track 1 的 Transformer 未调参、未匹配参数/算力。
+- 自然语言、通用推理或大规模真实代码能力；Track 3B 只是本仓库的小型源码后缀。
+- 对调参后 Transformer 的全面优势；Track 1/3A 的 Transformer 未调参，Track 3B 只匹配参数量、未匹配算力。
 - 多 seed 稳健性、统计显著性、置信区间。
 - 生产吞吐、长上下文实测解码、分布式/混合精度/量化能力。
-- 训练显存的 O(1) 性质：V6 会物化 `F_seq`，训练激活随 `L` 增长；只有持久推理状态是 O(1)。
-- “Engine I 在所有任务上都必要”或“三个引擎缺一不可”的普适结论；本次 V6 No-I 跌到随机，但 V5 没有，说明结论对优化轨迹和 seed 敏感。
+- 训练显存的 O(1) 性质：V7 仍会物化 `F_seq`，训练激活随 `L` 增长；只有持久推理状态是 O(1)。
+- “Engine I 在所有任务上都必要”或“三个引擎缺一不可”的普适结论；本次 No-I 跌到随机，但 V5 没有，说明结论对优化轨迹和 seed 敏感。
 - JIT 已接近硬件最优；它仍是编译后的 PyTorch 循环，状态递归仍串行。
 
 ---
 
 ## 8. 建议的下一步
 
-1. **多 seed**：至少 3 个 seed，报告 mean ± std，尤其是 No-Engine-I 的方差。
-2. **更强基线**：调参 Transformer，匹配非位置参数量、训练 token 与算力。
-3. **更长/更难 Code LM**：更多变量、更长训练、held-out 模板；当前封闭语法上的 100.00% 不足以支撑真实代码能力结论。
-4. **3–5 hop**：验证 latent re-query 是否随跳数扩展，以及 router 是否学会使用额外循环。
-5. **真正 kernel**：在 JIT + 向量化多跳的基础上做 fused/chunked CUDA/Triton scan；V6 已达到 1.57×（对 V5）/1.70×（对 V4），下一步是减少小 kernel launch 与串行状态更新成本。
-6. **长上下文实测**：用真实 KV cache 解码对比 32K–128K 的延迟与显存，而不只做公式核算。
+1. **多 seed**：至少 3 个 seed，报告 mean ± std，尤其是 No-Engine-I 的方差和 Track 3A/3B 的稳定性。
+2. **更强基线**：调参 Transformer，匹配非位置参数量、训练 token 与算力；当前 Track 3B 只匹配参数量。
+3. **更大真实代码语料**：用 held-out 文件/仓库替代本仓库 15% 后缀，才能检验真实代码泛化。
+4. **4–6 hop**：验证 latent re-query 是否随跳数扩展，以及 router 是否学会使用额外循环。
+5. **真正 kernel**：在 JIT + 向量化多跳 + 原生流式的基础上做 fused/chunked CUDA/Triton scan；减少小 kernel launch 与串行状态更新成本。
+6. **长上下文实测**：用真实 KV cache 解码对比 32K–128K 的延迟与显存，而不只做公式核算；V7 的 2.160 ms/token 只是单机 B=1 循环测量。
 
 ---
 
@@ -201,21 +248,24 @@ python tests/test_v5.py
 
 | 项目 | 状态 |
 | :--- | :---: |
-| V6 模型代码（JIT 四元组 + 向量化多跳 + LM + baseline） | ✅ 完成 |
+| V6 模型代码（JIT 四元组 + 向量化多跳 + LM + baseline） | ✅ 完成并保留 |
 | Track 1 五组消融 | ✅ 完成并写入报告 |
 | Track 2 因果字节码 Contextual Code LM | ✅ 完成并写入报告 |
 | V6 / V5 / V4 耗时对比 | ✅ 80.0 s vs 125.3 s vs 136.0 s（1.57× / 1.70×） |
-| 推理状态核算 | ✅ 17.00 KiB；32K 时 3,855.1× |
-| README / SPEC 同步 | ✅ 已更新为 V6 数据 |
-| LICENSE / .gitignore / pyproject | ✅ 已创建 |
-| 测试文件 | ✅ `tests/test_v5.py` 已创建；命令见上 |
-| 结果报告与图 | ✅ 已生成 |
+| V7 `init_state` / `forward_step` 流式接口 | ✅ 完成；最大 logit 误差 5.96e-07，2.160 ms/token |
+| V7 推理状态核算 | ✅ 17,408 bytes = 17.00 KiB；L=128..4,096 恒定 |
+| Track 3A：3-Hop 链式推理 | ✅ 完成；Full 100.00%/100.00%，max_loops=1 25.39%/23.91% |
+| Track 3B：真实 Python 源码 held-out LM | ✅ 完成；TriCore PPL 18.616 / 41.47%，Transformer 19.428 / 28.15% |
+| README / SPEC 同步 | ✅ 已更新为 V7 数据 |
+| LICENSE / .gitignore / pyproject | ✅ 已创建；版本 1.0.0 |
+| 测试文件 | ✅ `tests/test_v5.py`、`tests/test_v7_streaming.py`；`python -m pytest -q` → **6 passed** |
+| 结果报告与图 | ✅ 已生成；V6 表格保留 + V7 附录追加 |
 | 本汇报文件 | ✅ 已生成 |
 
-> 一句话总结：**V6 把 Engine III 的多跳重查询向量化到全部时间步，Full 训练从 V5 的 125.3 s 降到 80.0 s（1.57×，对 V4 为 1.70×），并用因果字节码把 Track 2 的解引用目标移到返回别名 `pos + 1`，在该封闭语法上达到 100.00%；但状态递归仍串行，Track 2 不是真实代码，Track 1 的 Engine I 消融也再次显示单 seed 结论并不稳固。下一阶段的重点是多种子、强基线、held-out 模板和真正的 kernel。**
+> 一句话总结：**V7 在 V6 的恒定状态与向量化多跳之上补上了原生 `init_state` / `forward_step` 流式解码（17,408 bytes 恒定状态、5.96e-07 等价误差、2.160 ms/token），并用 Track 3A 证明第二次 refinement 是第三跳所必需（Full 100.00% vs 两跳上限 25.39%），用 Track 3B 在真实仓库源码的严格 15% held-out 后缀上取得 PPL 18.616 / 41.47%（参数匹配 Transformer 19.428 / 28.15%）。但全部结果仍是单 seed，Track 3A 是合成任务，Track 3B 语料很小且 TriCore 训练约慢 38×，不能据此宣称通用推理、真实代码理解或吞吐优势。**
 
 ---
 
 <p align="center">
-  <i>TriCore V6 — constant state, surprise-gated writes, causal delta memory, and a vectorized latent loop.</i>
+  <i>TriCore V7 — constant state, surprise-gated writes, causal delta memory, a vectorized latent loop, and native one-token streaming.</i>
 </p>

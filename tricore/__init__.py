@@ -1,5 +1,10 @@
 from .model import TriCoreBlock, TriCoreLM, BaselineTransformerLM
-from .tasks import generate_associative_recall_batch, generate_contextual_code_lm_batch
+from .tasks import (
+    generate_3hop_recall_batch,
+    generate_associative_recall_batch,
+    generate_contextual_code_lm_batch,
+    load_real_python_corpus_batches,
+)
 
 __all__ = [
     "TriCoreBlock",
@@ -7,4 +12,6 @@ __all__ = [
     "BaselineTransformerLM",
     "generate_associative_recall_batch",
     "generate_contextual_code_lm_batch",
+    "generate_3hop_recall_batch",
+    "load_real_python_corpus_batches",
 ]

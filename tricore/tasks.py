@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import torch
 
 
@@ -138,3 +140,157 @@ def generate_contextual_code_lm_batch(
     inputs = seq[:, :-1].to(device)
     lm_targets = seq[:, 1:].to(device)
     return inputs, lm_targets, deref_mask.to(device)
+
+
+def generate_3hop_recall_batch(
+    batch_size: int = 64,
+    num_chains: int = 4,
+    num_queries: int = 4,
+    vocab_size: int = 64,
+    noise_len: int = 12,
+    device: str = "cpu",
+):
+    """Track 3A: 3-hop chained recall with an adversarial distractor gap.
+
+    Layout per sample::
+
+        [k_i, m1_i, 0] * num_chains        # shuffled hop-1 facts
+        [m1_i, m2_i, 0] * num_chains       # shuffled hop-2 facts
+        [m2_i, v_i, 0] * num_chains        # shuffled hop-3 facts
+        [m1_i, 0, m2_i, 0, ...]            # noise_len distractor tokens
+        [k_q, 0] * num_queries             # query at the key position
+
+    The target at a query key position is ``v_q``, so a correct prediction
+    requires the chain ``k_q -> m1_q -> m2_q -> v_q``.  The query is emitted
+    only once, making this a single-step three-hop retrieval test.
+    """
+    if num_chains < 1:
+        raise ValueError("num_chains must be positive")
+    if num_queries > num_chains:
+        raise ValueError("num_queries cannot exceed num_chains")
+    if noise_len % 2 != 0:
+        raise ValueError("noise_len must be even for [m, 0] distractor pairs")
+
+    tier_size = (vocab_size - 1) // 4
+    if num_chains > tier_size:
+        raise ValueError(
+            f"num_chains={num_chains} exceeds the {tier_size}-token tier size"
+        )
+
+    key_pool = torch.arange(1, 1 + tier_size)
+    m1_pool = torch.arange(1 + tier_size, 1 + 2 * tier_size)
+    m2_pool = torch.arange(1 + 2 * tier_size, 1 + 3 * tier_size)
+    val_pool = torch.arange(1 + 3 * tier_size, 1 + 4 * tier_size)
+
+    hop_len = num_chains * 3
+    query_len = num_queries * 2
+    seq_len = hop_len * 3 + noise_len + query_len
+
+    inputs = torch.zeros((batch_size, seq_len), dtype=torch.long)
+    targets = torch.full((batch_size, seq_len), -100, dtype=torch.long)
+
+    for b in range(batch_size):
+        k_toks = key_pool[torch.randperm(tier_size)[:num_chains]]
+        m1_toks = m1_pool[torch.randperm(tier_size)[:num_chains]]
+        m2_toks = m2_pool[torch.randperm(tier_size)[:num_chains]]
+        v_toks = val_pool[torch.randperm(tier_size)[:num_chains]]
+
+        for pos_idx, chain_idx in enumerate(torch.randperm(num_chains)):
+            base = pos_idx * 3
+            inputs[b, base] = k_toks[chain_idx]
+            inputs[b, base + 1] = m1_toks[chain_idx]
+
+        for pos_idx, chain_idx in enumerate(torch.randperm(num_chains)):
+            base = hop_len + pos_idx * 3
+            inputs[b, base] = m1_toks[chain_idx]
+            inputs[b, base + 1] = m2_toks[chain_idx]
+
+        for pos_idx, chain_idx in enumerate(torch.randperm(num_chains)):
+            base = 2 * hop_len + pos_idx * 3
+            inputs[b, base] = m2_toks[chain_idx]
+            inputs[b, base + 1] = v_toks[chain_idx]
+
+        gap_start = 3 * hop_len
+        for pair_idx in range(noise_len // 2):
+            chain_idx = pair_idx % num_chains
+            bridge = m1_toks[chain_idx] if pair_idx % 2 == 0 else m2_toks[chain_idx]
+            inputs[b, gap_start + pair_idx * 2] = bridge
+
+        q_offset = gap_start + noise_len
+        q_indices = torch.randperm(num_chains)[:num_queries]
+        for q_idx, chain_idx in enumerate(q_indices):
+            q_pos = q_offset + q_idx * 2
+            inputs[b, q_pos] = k_toks[chain_idx]
+            targets[b, q_pos] = v_toks[chain_idx]
+
+    return inputs.to(device), targets.to(device)
+
+
+def load_real_python_corpus_batches(
+    batch_size: int = 32,
+    seq_len: int = 96,
+    device: str = "cpu",
+):
+    """Load a byte-level next-token stream from real repository Python files.
+
+    Returns ``(sample_train_batch, iter_val_batches, vocab_size)``.  The first
+    85% of the concatenated source stream is training data and the final 15%
+    is a strict held-out validation suffix.  No training window may cross the
+    split boundary, and validation windows start at or after it.
+
+    The vocabulary is ASCII byte-level (0..127), so ``vocab_size=128``.  Bytes
+    outside ASCII are replaced by ``?`` to preserve the fixed vocabulary.
+    """
+    if seq_len < 2:
+        raise ValueError("seq_len must be at least 2")
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+
+    repo_root = Path(__file__).resolve().parent.parent
+    source_paths = [
+        repo_root / "tricore" / "model.py",
+        repo_root / "tricore" / "tasks.py",
+        repo_root / "run_experiment.py",
+    ]
+    missing = [str(path) for path in source_paths if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "real Python corpus files are missing: " + ", ".join(missing)
+        )
+
+    raw = b"".join(path.read_bytes() for path in source_paths)
+    ascii_bytes = raw.decode("ascii", errors="replace").encode("ascii")
+    data = torch.tensor(list(ascii_bytes), dtype=torch.long)
+
+    split = int(data.numel() * 0.85)
+    train_data = data[:split]
+    val_data = data[split:]
+    if train_data.numel() < seq_len + 1 or val_data.numel() < seq_len + 1:
+        raise ValueError(
+            "corpus split is too short for the requested seq_len; "
+            f"train={train_data.numel()}, val={val_data.numel()}, seq_len={seq_len}"
+        )
+
+    def sample_train_batch():
+        max_start = train_data.numel() - seq_len - 1
+        starts = torch.randint(0, max_start + 1, (batch_size,))
+        x = torch.stack(
+            [train_data[start:start + seq_len] for start in starts.tolist()]
+        )
+        y = torch.stack(
+            [train_data[start + 1:start + seq_len + 1] for start in starts.tolist()]
+        )
+        return x.to(device), y.to(device)
+
+    val_batches = []
+    max_val_start = val_data.numel() - seq_len - 1
+    for start in range(0, max_val_start + 1, seq_len):
+        x = val_data[start:start + seq_len].unsqueeze(0)
+        y = val_data[start + 1:start + seq_len + 1].unsqueeze(0)
+        val_batches.append((x.to(device), y.to(device)))
+
+    def iter_val_batches():
+        for x, y in val_batches:
+            yield x, y
+
+    return sample_train_batch, iter_val_batches, 128
