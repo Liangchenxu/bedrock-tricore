@@ -1,6 +1,6 @@
-# TriCore V7 — Architecture Specification and Benchmark Record
+# TriCore V8 — Architecture Specification and Benchmark Record
 
-**Project:** `tricore-arch` 1.0.0  
+**Project:** `tricore-arch` 1.1.0  
 **Operator:** attention-free, constant-size recurrent state, causal shifted fast-weight binding, vectorized latent multi-hop re-query  
 **Runtime:** `@torch.jit.script tricore_fused_scan` for the O(1) state, a batched 5-D multi-hop training pass, and native `init_state` / `forward_step` per-token decoding  
 **Status:** research reference; three evaluation tracks, including a real-source held-out LM  
@@ -13,7 +13,7 @@
 
 ## 1. Scope
 
-TriCore V7 is a sequence operator with three independently ablatable mechanisms:
+TriCore V8 is a sequence operator with three independently ablatable mechanisms:
 
 1. **Engine I — Surprise-Gated State Collapse and Write Protection:** a gated recurrent vector `h_t`, plus a learned per-head write gate on the fast-weight learning rate.
 2. **Engine II — Subspace-Aligned Causal Shifted Fast Weights:** a per-head delta-rule matrix `F_t` that binds `K_{t-1}` to `V_t`, with a shared canonical address for Q/K/V.
@@ -39,7 +39,7 @@ The specification has six non-goals:
 - It does **not** claim that the JIT scan is a custom CUDA kernel or a production-throughput solution.
 - It does **not** claim that the recurrent state update is parallel; only the multi-hop refinement is vectorized across `L`.
 
-The evidence is three single-seed evaluation tracks: a 500-step five-variant 2-hop associative recall study, a 450-step two-model causal bytecode LM study, and a V7 study with streaming equivalence/memory checks, a 450-step 3-hop comparison, and a 300-step real-source held-out LM comparison.
+The evidence is three single-seed V6/V7 evaluation tracks — a 500-step five-variant 2-hop associative recall study, a 450-step two-model causal bytecode LM study, and a V7 study with streaming equivalence/memory checks, a 450-step 3-hop comparison, and a 300-step real-source held-out LM comparison — plus V8's 3-seed compact 2-Hop MQAR variance check and measured CUDA decode-state/KV-cache profiling.
 
 ---
 
@@ -78,7 +78,7 @@ numpy>=1.24.0
 matplotlib>=3.7.0
 ```
 
-`pyproject.toml` declares `tricore-arch==1.0.0`, Python `>=3.10`, and the same runtime dependencies. `pip install -e .` installs the `tricore` import package.
+`pyproject.toml` declares `tricore-arch==1.1.0`, Python `>=3.10`, and the same runtime dependencies. `pip install -e .` installs the `tricore` import package.
 
 ### 2.2 Public API
 
@@ -464,7 +464,7 @@ The V6 Full timing includes data generation, forward, backward, and optimizer st
 
 ### 6.6 Evaluation limits
 
-There is no multi-seed confidence interval, no hyperparameter search for the Transformer, and no FLOP matching. Track 1/2 have no real held-out set. Track 3B has a real-source held-out suffix but the corpus is only this small repository. Track 2 and Track 3A are synthetic; Track 3B is not a human-code benchmark.
+There is no multi-seed confidence interval for the full V6/V7 Track 1/2/3 reference runs, no hyperparameter search for the Transformer, and no FLOP matching. V8 adds a 3-seed mean ± std check only for a compact 2-Hop MQAR (`d_model=32`, 1 chain, 1 query); it is a variance check, not a significance test, and it does not repower the full-size runs. Track 1/2 have no real held-out set. Track 3B has a real-source held-out suffix but the corpus is only this small repository. Track 2 and Track 3A are synthetic; Track 3B is not a human-code benchmark.
 
 ---
 
@@ -547,6 +547,32 @@ Chance is 25% (four values). The second refinement is required to complete `k_q 
 
 The corpus is the ASCII byte stream of this repository's `tricore/model.py`, `tricore/tasks.py`, and `run_experiment.py`; the final 15% is an unseen suffix. The Transformer is parameter-matched with a short position table, but TriCore is about 38x slower in this small training loop. This is a single-seed quality/budget observation, not a throughput or human-code claim.
 
+### 7.8 Track 4A: 3-seed statistical verification
+
+`run_v8_verification.py` runs a compact 2-Hop MQAR under seeds `42/100/2026`: 350 steps, batch 64, AdamW, `lr=3e-3`, weight decay `0.01`, cosine decay, clipping `1.0`; `d_model=32`, `d_fast=8`, 1 chain, 1 query, `noise_len=2`, `vocab_size=64` (sequence length 10). The 4x OOD test uses gap 8 (sequence length 16). Metrics are mean ± std over seeds on 5 fixed evaluation batches of 64 examples.
+
+| Variant | Parameters | In-domain recall | 4x-gap recall | Mean train time |
+| :--- | :---: | :---: | :---: | :---: |
+| **TriCore Full (`max_loops=2`)** | 16,559 | **100.00 ± 0.00%** | **100.00 ± 0.00%** | 10.99 s |
+| TriCore No Engine II: Fast-Weight | 16,559 | **100.00 ± 0.00%** | 65.73 ± 9.04% | 4.23 s |
+| TriCore No Engine III: Adaptive Loop | 16,559 | **100.00 ± 0.00%** | 31.56 ± 10.58% | 7.83 s |
+| Vanilla Transformer (2-layer) | 23,296 | **100.00 ± 0.00%** | 77.29 ± 9.88% | 2.07 s |
+
+The compact in-domain task saturates for every model. The 4x gap separates them: Full is `+34.27` points over No Engine II, `+68.44` over No Engine III, and `+22.71` over the untuned Transformer on the seed mean. Full has zero seed variance; all non-Full variants have non-zero variance. With three seeds this is a variance check, not a significance test, and the compact configuration is not a replacement for the V6/V7 reference runs.
+
+### 7.9 Track 4B: measured CUDA decode state and KV cache
+
+Measured on CUDA, batch size 1, FP32, 8 warm-up + 32 timed steps. `CUDA Alloc Δ` is the `torch.cuda.memory_allocated()` delta after `empty_cache()`. The baseline performs a real cached 2-layer Transformer decode with scaled dot-product attention over the full causal cache; it is not a formula estimate.
+
+| Length | TriCore state bytes | CUDA Alloc Δ | Transformer K+V bytes | CUDA Alloc Δ | Reduction | TriCore ms/token | Transformer ms/token |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| 128 | 17,408 | 17,408 | 262,144 | 262,144 | **15.1x** | 2.086 | 1.199 |
+| 512 | 17,408 | 17,408 | 1,048,576 | 1,048,576 | **60.2x** | 1.895 | 1.074 |
+| 1,024 | 17,408 | 17,408 | 2,097,152 | 2,097,152 | **120.5x** | 1.774 | 1.165 |
+| 2,048 | 17,408 | 17,408 | 4,194,304 | 4,194,304 | **240.9x** | 1.780 | 1.319 |
+
+The TriCore state is `(D + H*d_head^2 + H*d_head) * 4 = 17,408` bytes = **17.00 KiB per sample** for `D=128`, `H=4`, `d_head=32`, independent of `L`. The baseline cache is `2 * n_layers * L * D * 4`, i.e. 2.00 KiB per token, reaching 4.00 MiB at `L=2,048`. The Transformer remains faster per token at every measured length; the result is a measured memory advantage, not a latency advantage. The 32K/3,855.1x row stays arithmetic. Full V8 script runtime on the reference CUDA machine is **94.6 s** (Track 4A 94.1 s, Track 4B 0.52 s), so it is not a 60-second-compliant run.
+
 ---
 
 ## 8. Verification record
@@ -578,6 +604,8 @@ All four outputs (`h_seq`, `r1_seq`, `F_seq`, `surprise_trace`) must satisfy `to
 
 The complete suite currently reports 6 passing tests. `run_v7_benchmark.py` regenerates only the V7 streaming and Track 3 sections; it preserves the V6 Track 1/Track 2 tables in `results/BENCHMARK_REPORT.md`.
 
+V8 adds no new numerical invariant to the model. `run_v8_verification.py` exercises the existing training path under three seeds and writes `results/V8_METRICS.json`; `demo_showcase.py` exercises `init_state` / `forward_step` end to end. Track 4A is a 3-seed compact rerun, and Track 4B is a real CUDA allocation/latency measurement, both reported in sections 7.8-7.9.
+
 ### 8.4 Full run
 
 The V6 reference run completed on CUDA and regenerated the report and plot. `run_v7_benchmark.py` then appended the V7 streaming and Track 3 sections in place, preserving the V6 tables. The report is the source of truth for all numbers in this document. The generated V6 plot is a 2x2 panel:
@@ -595,6 +623,8 @@ python tests/test_v5.py
 python tests/test_v7_streaming.py
 python run_experiment.py
 python run_v7_benchmark.py
+python run_v8_verification.py
+python demo_showcase.py
 python run_experiment.py --steps 2 --code-steps 2  # smoke
 ```
 
@@ -621,7 +651,7 @@ python run_experiment.py --steps 2 --code-steps 2  # smoke
 
 ### 9.2 Open work
 
-- Multi-seed mean ± std for all three tracks.
+- 3-seed mean ± std for the full-size V6/V7 tracks (V8 already does the compact 2-Hop MQAR) and a significance test.
 - 4-6 hop chains and variable `max_loops`.
 - Stronger adversarial writes and higher noise density.
 - Long-context streaming latency and memory against a real KV cache.

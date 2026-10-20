@@ -1,4 +1,4 @@
-# TriCore V7 Experimental Benchmark Report
+# TriCore V8 Experimental Benchmark Report
 
 - **Compute Device:** `CUDA`
 - **Operator:** TorchScript JIT recurrent scan + vectorized parallel multi-hop Engine III + native `init_state` / `forward_step` streaming
@@ -7,6 +7,9 @@
 - **V7 Streaming:** `forward_step` equivalence on 2 x 64 tokens; 4,096-step latency/memory check; 17.00 KiB persistent state.
 - **Track 3A:** 3-Hop Chained Recall; 450 steps, batch 64, lr 3e-3, seed 42; 4 chains, 4 queries, 12 training distractors; `max_loops=1` vs `max_loops=2` vs 2-layer Transformer.
 - **Track 3B:** Real Python source held-out LM; 300 steps, batch 32, lr 3e-3, seed 42; ASCII byte vocabulary 128; first 85% train, final 15% strict held-out.
+- **Track 4A:** 2-Hop MQAR multi-seed robustness; 350 steps, batch 64, lr 3e-3; seeds 42/100/2026; compact three-chain protocol; Mean ± Std (%).
+- **Track 4B:** Real CUDA decode-state/KV-cache profiling at L=128/512/1024/2048; measured tensor bytes, allocator delta, and ms/token.
+- **V8 Demo:** `python demo_showcase.py` streams a three-hop chain through `forward_step` with a live surprise-gate and 17.00 KiB memory dashboard.
 - **Open-source packaging:** `ready` (MIT LICENSE, .gitignore, pyproject.toml)
 
 ## 1. JIT Fusion and Track 1 Ablation
@@ -117,3 +120,61 @@ This is a small single-seed real-source experiment, not a human-code benchmark. 
 **Metric note.** Track 1 recall is measured only at query positions where the target is not `-100`. The 4x extrapolation multiplies the adversarial distractor gap (16 -> 64 tokens), not the total sequence length. Track 1 uses fixed evaluation batches generated with seed 2026/2027; Track 2 uses fixed evaluation batches generated with seed 3030. There is no fixed real-world held-out set.
 
 **Scope.** These are single-seed synthetic experiments. They do not establish natural-language ability, tuned-Transformer parity, multi-seed confidence intervals, or production throughput.
+
+<!-- V8_APPENDIX_START -->
+## 8. Track 4A: Multi-Seed Statistical Verification (2-Hop MQAR)
+
+This track reruns the complete training protocol under three independent seeds (`42`, `100`, `2026`) with **350 optimizer steps, batch 64, AdamW, `lr=3e-3`**, weight decay `0.01`, cosine decay, and gradient clipping `1.0`.  To fit the requested end-to-end budget, the 2-Hop MQAR uses a compact but structurally identical configuration: `d_model=32`, `d_fast=8`, 1 chained key-value pairs, 1 queries, `vocab_size=64`, and an in-domain adversarial gap of 2 tokens (sequence length `10`).  The 4x test multiplies only the gap (`2 -> 8`).  Evaluation uses 5 fixed batches of 64 examples; accuracy is measured only at query positions where the target is not `-100`.
+
+| Model | Parameters | In-Domain Accuracy (Mean ± Std) | 4x Gap Accuracy (Mean ± Std) |
+| :--- | :---: | :---: | :---: |
+| TriCore Full (max_loops=2) | 16,559 | **100.00 ± 0.00%** | **100.00 ± 0.00%** |
+| TriCore (No Engine II: Fast-Weight) | 16,559 | **100.00 ± 0.00%** | **65.73 ± 9.04%** |
+| TriCore (No Engine III: Adaptive Loop) | 16,559 | **100.00 ± 0.00%** | **31.56 ± 10.58%** |
+| Vanilla Transformer (2-Layer) | 23,296 | **100.00 ± 0.00%** | **77.29 ± 9.88%** |
+
+The Full model reaches **100.00 ± 0.00%** in-domain and **100.00 ± 0.00%** at the 4x gap.  The best non-Full variant at the 4x gap is `Vanilla Transformer (2-Layer)` at **77.29 ± 9.88%**, so the Full OOD advantage is **+22.71 percentage points** on the seed mean.  The compact in-domain task saturates for all four models; the 4x gap is the discriminative metric.  A standard deviation of `0.00` means every seed produced the same query accuracy, and three seeds are a variance check rather than a significance test.
+
+### 8.1 Per-seed audit
+
+| Model | Seed | In-Domain | 4x Gap |
+| :--- | :---: | :---: | :---: |
+| TriCore Full (max_loops=2) | 42 | 100.00% | 100.00% |
+| TriCore Full (max_loops=2) | 100 | 100.00% | 100.00% |
+| TriCore Full (max_loops=2) | 2026 | 100.00% | 100.00% |
+| TriCore (No Engine II: Fast-Weight) | 42 | 100.00% | 55.31% |
+| TriCore (No Engine II: Fast-Weight) | 100 | 100.00% | 71.56% |
+| TriCore (No Engine II: Fast-Weight) | 2026 | 100.00% | 70.31% |
+| TriCore (No Engine III: Adaptive Loop) | 42 | 100.00% | 19.38% |
+| TriCore (No Engine III: Adaptive Loop) | 100 | 100.00% | 38.44% |
+| TriCore (No Engine III: Adaptive Loop) | 2026 | 100.00% | 36.88% |
+| Vanilla Transformer (2-Layer) | 42 | 100.00% | 85.31% |
+| Vanilla Transformer (2-Layer) | 100 | 100.00% | 80.31% |
+| Vanilla Transformer (2-Layer) | 2026 | 100.00% | 66.25% |
+
+## 9. Track 4B: Real CUDA Decode-State and KV-Cache Profiling
+
+Measured on `CUDA` with batch size 1 and FP32.  For TriCore, the script allocates the native `init_state` tuple `(h, F_mat, prev_k)` and records both its tensor bytes and the `torch.cuda.memory_allocated()` delta after `empty_cache()`.  It then runs 8 warm-up steps plus 32 timed `forward_step` calls.  For the baseline, it explicitly allocates `(K_cache, V_cache)` with shape `(n_layers, L, 1, n_heads, d_head)` and performs a real cached decode step through both Transformer layers with scaled dot-product attention over the full causal cache at position `L-1`; the same 8 + 32 timing protocol is used.  This replaces a formula-only estimate with measured GPU tensor allocation.
+
+| Sequence Length | TriCore State Bytes | CUDA Alloc Δ (B) | State | Transformer K+V Bytes | CUDA Alloc Δ (B) | Cache | Reduction | TriCore ms/token | Transformer ms/token |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| 128 | 17,408 | 17,408 | 17.00 KiB | 262,144 | 262,144 | 0.25 MiB | **15.1x** | 2.086 | 1.199 |
+| 512 | 17,408 | 17,408 | 17.00 KiB | 1,048,576 | 1,048,576 | 1.00 MiB | **60.2x** | 1.895 | 1.074 |
+| 1,024 | 17,408 | 17,408 | 17.00 KiB | 2,097,152 | 2,097,152 | 2.00 MiB | **120.5x** | 1.774 | 1.165 |
+| 2,048 | 17,408 | 17,408 | 17.00 KiB | 4,194,304 | 4,194,304 | 4.00 MiB | **240.9x** | 1.780 | 1.319 |
+
+**Accounting.** The TriCore state is `(D + H*d_head^2 + H*d_head) * 4` `= 17,408` bytes = **17.00 KiB per sample**, independent of `L` (`D=128`, `H=4`, `d_head=32`).  The baseline cache is `2 * n_layers * L * D * 4` bytes; with `n_layers=2` and `D=128` it grows by **2.00 KiB per token** and reaches 4.00 MiB at `L=2,048`.
+
+## 10. V8 Reproduction and Interactive Demo
+
+Run the statistical and profiling checks, then launch the one-command streaming visualizer:
+
+```bash
+python run_v8_verification.py
+python demo_showcase.py
+```
+
+`demo_showcase.py` builds a three-hop chain (`Key_A -> Bridge_1 -> Bridge_2 -> Target_Z`) with adversarial noise, streams it through `TriCoreLM.init_state` / `forward_step`, and prints the per-token Engine I surprise-gate trace together with the flat 17.00 KiB persistent-memory dashboard.  It uses no checkpoint and no CUDA-only dependency.
+
+Measured V8 script runtime on `CUDA`: **94.6 s** (Track 4A + Track 4B, including data generation and evaluation).
+<!-- V8_APPENDIX_END -->
