@@ -1,4 +1,19 @@
-# TriCore V9 完成报告
+
+## V10 (v1.3.0) Track 5: Infix Code Assignment with `=` (`EQ`) & 100% Fair Engine I Ablation
+
+- **Self-Audit Fix 1 (Infix `EQ` Bridging):** Restores `[LET, alias_i, EQ, var_i, SEMI]` and `[SET, var_i, EQ, lit_i, SEMI]` with an explicit `=` (`EQ`) token between keys and values. Synaptic Eligibility Trace (`prev_k = normalize((1 - elig_gate) * prev_k + elig_gate * k_t)`) latches entity keys across low-surprise syntax connectors.
+
+- **Self-Audit Fix 2 (100% Fair No-Engine-I Ablation):** Removed all artificial decay penalties (`0.82`) and projection handicaps. `Fair No-Engine-I` shares the exact same learned `fast_decay`, `fast_lr`, and residual projections as `Full`, only fixing `write_gate = 1.0` and `elig_gate = 1.0`.
+
+
+| Architecture Variant | Parameters | Val Loss | Infix `EQ` 2-Hop Deref Acc (%) | Train Time (s) |
+| :--- | :---: | :---: | :---: | :---: |
+| **TriCore V10 Full (With Eligibility Trace)** | 60,819 | 1.7359 | **42.24%** | 103.5s |
+| **TriCore V10 Fair No-Engine-I (Unmodulated Gate)** | 60,819 | 1.6614 | **45.80%** | 93.8s |
+| **Vanilla Transformer (2-Layer)** | 206,336 | 1.6690 | **32.03%** | 14.4s |
+
+---
+# TriCore V10 完成报告
 
 ## TriCore V10（v1.3.0）— 突触资格迹 + 100% 公平 Engine I 消融
 
@@ -30,12 +45,12 @@
 alias 资格迹而跌至随机水平。该结果来自单机单 seed 的方差检查，不是显著性检验。
 
 
-**日期：** 2026-10-20  
-**版本：** `tricore-arch` 1.2.0  
-**状态：** V9 完成；V7 原生 O(1) 流式推理、3-Hop 链式推理、真实 Python 源码 Held-Out LM 全部保留；新增零 `F_seq` 训练路径、4 链 5 组 3-Seed 消融与 32K 真实 CUDA 显存/延迟实测  
+**日期：** 2026-10-21  
+**版本：** `tricore-arch` 1.3.0  
+**状态：** V10 完成；新增突触资格迹 `prev_k`、跨 `EQ` 中缀解引用、双层 token-role 门网络与 100% 公平 Engine I 消融；V7 原生 O(1) 流式推理、3-Hop 链式推理、真实 Python 源码 Held-Out LM 全部保留  
 **实测报告：** `results/BENCHMARK_REPORT.md`  
 **图表：** `results/tricore_vs_transformer.png`  
-**运行设备：** CUDA
+**运行设备：** CPU（V10 Track 5）；CUDA（V9 历史 Track 4B）
 
 ---
 
@@ -343,8 +358,12 @@ V9 新增的证据是：训练期不再物化 `F_seq`，Engine III 已融合进 
 | V9 零 `F_seq` 训练路径 | ✅ Engine III 融合进 `tricore_fused_scan`；scan 返回 `(h_seq, mem_seq, surprise_trace)` |
 | V9 Track 4A：4 链 5 组 3 seeds | ✅ Full 100.00 ± 0.00% / 100.00 ± 0.00%；No-I 5.65/5.55%，No-II 5.55/5.31%，No-III 23.41/23.54%，Transformer 25.08/22.24% |
 | V9 Track 4B：32K 真实 CUDA | ✅ 17,408 B 恒定 vs 64.00 MiB KV cache = 3,855.1×；延迟在 8,192 交叉，32K 1.939 vs 9.572 ms/token |
-| README / SPEC 同步 | ✅ 已更新为 V9 数据（V6/V7 保留） |
-| LICENSE / .gitignore / pyproject | ✅ 已创建；版本 1.2.0 |
+| V10 突触资格迹 `prev_k` | ✅ `q_read = normalize(elig_gate * q_t + (1 - elig_gate) * prev_k)`；`EQ` 处门关闭时直接查询前一个实体 key |
+| V10 双层 token-role 门网络 | ✅ `write_gate_proj` / `elig_gate_proj` 升级为 `Linear -> SiLU -> Linear`，并用 ridge 解出 `EQ` 关闭、普通 token 开启的先验；常量 `EQ` 掩码防止漂移 |
+| V10 Track 5：跨 `EQ` 中缀解引用 | ✅ 350 步、batch 64、seed 42；Full / 公平 No-Engine-I / Transformer 三模型结果见顶部 |
+| V10 100% 公平 Engine I 消融 | ✅ 不覆盖 `fast_lr`、`fast_decay`；与 Full 共享 Q/K/V 投影和门网络，仅关闭惊奇调制 |
+| README / SPEC 同步 | ✅ 已更新为 V10 数据（V6/V7/V9 保留） |
+| LICENSE / .gitignore / pyproject | ✅ 已创建；版本 1.3.0 |
 | 测试文件 | ✅ `tests/test_v5.py`、`tests/test_v7_streaming.py`；`python -m pytest -q` → **7 passed** |
 | 结果报告与图 | ✅ 已生成；V6/V7 表格保留 + V9 Track 4 附录 |
 | 原始指标 | ✅ `results/V9_METRICS.json`（含 per-seed 审计与 Track 4B 六行原始数据） |
@@ -355,5 +374,5 @@ V9 新增的证据是：训练期不再物化 `F_seq`，Engine III 已融合进 
 ---
 
 <p align="center">
-  <i>TriCore V9 — zero-F_seq training, constant state, surprise-gated writes, causal delta memory, a fused latent loop, and native one-token streaming.</i>
+  <i>TriCore V10 — a synaptic eligibility trace that carries entity keys across infix EQ, a 100% fair Engine I ablation, zero-F_seq training, constant state, and native one-token streaming.</i>
 </p>

@@ -56,7 +56,9 @@ def _reference_scan(
                     eff_lr * synapse_err, prev_k.transpose(-1, -2)
                 )
             q_read = torch.nn.functional.normalize(
-                q_t + prev_k, p=2.0, dim=-2
+                elig_gate * q_t + (1.0 - elig_gate) * prev_k,
+                p=2.0,
+                dim=-2,
             )
             r1 = torch.matmul(F_mat, q_read)
             if enable_adaptive_loop:
@@ -210,7 +212,7 @@ def test_eligibility_gate_is_active_and_fair_ablation_keeps_parameters():
     full, _ = full_model(x)
     fair_no_i, _ = fair_model(x)
     assert full.shape == fair_no_i.shape
-    assert full_model.layers[0].elig_gate_proj.weight.numel() > 0
+    assert full_model.layers[0].elig_gate_proj[-1].weight.numel() > 0
     assert not torch.allclose(full, fair_no_i)
 
 

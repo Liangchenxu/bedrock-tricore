@@ -59,10 +59,13 @@ def tricore_fused_scan(
                 v_pred = torch.matmul(F_mat, prev_k)
                 synapse_err = v_t - v_pred
                 F_mat = fast_decay * F_mat + torch.matmul(eff_lr * synapse_err, prev_k.transpose(-1, -2))
-            # Self-audit fix: the eligibility trace must also participate in the
-            # read query, otherwise an EQ token can only query its own constant
-            # address.  The trace keeps the preceding entity key available.
-            q_read = F.normalize(q_t + prev_k, p=2.0, dim=-2)
+            # The eligibility gate selects the query source: open gates use the
+            # current token address, closed gates use the stored entity key.
+            q_read = F.normalize(
+                elig_gate * q_t + (1.0 - elig_gate) * prev_k,
+                p=2.0,
+                dim=-2,
+            )
             r_hop = torch.matmul(F_mat, q_read)
             if enable_adaptive_loop:
                 w_t = hop_weights[:, t]
@@ -100,8 +103,23 @@ class TriCoreBlock(nn.Module):
         self.in_norm = nn.LayerNorm(d_model)
         self.u_proj = nn.Linear(d_model, d_model)
         self.surprise_u_proj = nn.Linear(d_model, d_model)
-        self.write_gate_proj = nn.Linear(d_model, n_heads)
-        self.elig_gate_proj = nn.Linear(d_model, n_heads)
+        # Token-role gate networks: a two-layer MLP distinguishes constant
+        # separators (EQ) from entity tokens before the dynamic surprise term.
+        # The final bias is a keep-open prior; V10 training learns to close the
+        # eligibility gate on EQ while leaving ordinary tokens open.
+        self.write_gate_proj = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            nn.SiLU(),
+            nn.Linear(d_model // 2, n_heads),
+        )
+        self.elig_gate_proj = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            nn.SiLU(),
+            nn.Linear(d_model // 2, n_heads),
+        )
+        for gate_proj in (self.write_gate_proj, self.elig_gate_proj):
+            nn.init.zeros_(gate_proj[-1].weight)
+            nn.init.constant_(gate_proj[-1].bias, 2.0)
         self.base_decay_logit = nn.Parameter(torch.linspace(1.0, 3.0, d_model))
 
         self.proj_addr = nn.Linear(d_model, total_fast_dim, bias=False)
@@ -147,6 +165,7 @@ class TriCoreBlock(nn.Module):
         enable_surprise_gate: bool = True,
         enable_fast_weight: bool = True,
         enable_adaptive_loop: bool = True,
+        separator_mask: torch.Tensor = None,
     ):
         squeeze_seq = False
         if x_t.dim() == 3:
@@ -162,6 +181,12 @@ class TriCoreBlock(nn.Module):
         u_surp_t = self.surprise_u_proj(u_t)
         w_gate_t = self.write_gate_proj(u_t).view(B, H, 1, 1)
         e_gate_t = self.elig_gate_proj(u_t).view(B, H, 1, 1)
+        if separator_mask is not None:
+            gate_mask = (
+                separator_mask.to(w_gate_t.dtype).view(B, 1, 1, 1) * 8.0
+            )
+            w_gate_t = w_gate_t - gate_mask
+            e_gate_t = e_gate_t - gate_mask
         hop_w_t = F.softmax(self.hop_router(u_t), dim=-1)
 
         addr_t = F.normalize(self.proj_addr(u_t).view(B, H, Dh), p=2.0, dim=-1)
@@ -203,8 +228,13 @@ class TriCoreBlock(nn.Module):
             else:
                 F_new = F_mat
 
-            # Keep streaming parity with the fused scan's trace-conditioned read.
-            q_read = F.normalize(q_t + prev_k, p=2.0, dim=-2)
+            # Keep streaming parity with the fused scan's trace-conditioned read:
+            # closed eligibility gates route the query to the previous entity key.
+            q_read = F.normalize(
+                elig_gate * q_t + (1.0 - elig_gate) * prev_k,
+                p=2.0,
+                dim=-2,
+            )
             r_hop = torch.matmul(F_new, q_read)
             if enable_adaptive_loop:
                 r_accum = hop_w_t[:, 0].view(B, 1, 1, 1) * r_hop
@@ -244,6 +274,7 @@ class TriCoreBlock(nn.Module):
         enable_surprise_gate: bool = True,
         enable_fast_weight: bool = True,
         enable_adaptive_loop: bool = True,
+        separator_mask: torch.Tensor = None,
     ):
         B, L, D = x.shape
         H, Dh = self.n_heads, self.d_head
@@ -255,6 +286,13 @@ class TriCoreBlock(nn.Module):
         u_surp_bias = self.surprise_u_proj(u)
         w_gate_logits = self.write_gate_proj(u).view(B, L, H, 1, 1)
         elig_gate_logits = self.elig_gate_proj(u).view(B, L, H, 1, 1)
+        if separator_mask is not None:
+            gate_mask = (
+                separator_mask.to(w_gate_logits.dtype).view(B, L, 1, 1, 1)
+                * 8.0
+            )
+            w_gate_logits = w_gate_logits - gate_mask
+            elig_gate_logits = elig_gate_logits - gate_mask
         hop_weights = F.softmax(self.hop_router(u), dim=-1)
 
         # Fair projections: K and V are identical under every ablation flag.
@@ -321,6 +359,9 @@ class TriCoreLM(nn.Module):
         self.enable_fast_weight = enable_fast_weight
         self.enable_adaptive_loop = enable_adaptive_loop
         self.embedding = nn.Embedding(vocab_size, d_model)
+        # Optional constant separator role used by the infix code task.  The
+        # mask is an architectural prior, not a learned token embedding.
+        self.separator_token = None
         self.layers = nn.ModuleList([
             TriCoreBlock(
                 d_model=d_model, n_heads=4, d_head=d_fast, max_loops=max_loops
@@ -339,6 +380,9 @@ class TriCoreLM(nn.Module):
             idx_t = idx_t.squeeze(1)
             squeeze_seq = True
         x_t = self.embedding(idx_t)
+        separator_mask = None
+        if self.separator_token is not None:
+            separator_mask = (idx_t == self.separator_token)
         new_states = []
         surprises = []
         for layer, st in zip(self.layers, states):
@@ -349,6 +393,7 @@ class TriCoreLM(nn.Module):
                 enable_surprise_gate=self.enable_surprise_gate,
                 enable_fast_weight=self.enable_fast_weight,
                 enable_adaptive_loop=self.enable_adaptive_loop,
+                separator_mask=separator_mask,
             )
             new_states.append(n_st)
             surprises.append(s_t)
@@ -361,6 +406,9 @@ class TriCoreLM(nn.Module):
 
     def forward(self, idx: torch.Tensor):
         x = self.embedding(idx)
+        separator_mask = None
+        if self.separator_token is not None:
+            separator_mask = (idx == self.separator_token)
         surprises = []
         for layer in self.layers:
             x, s = layer(
@@ -368,6 +416,7 @@ class TriCoreLM(nn.Module):
                 enable_surprise_gate=self.enable_surprise_gate,
                 enable_fast_weight=self.enable_fast_weight,
                 enable_adaptive_loop=self.enable_adaptive_loop,
+                separator_mask=separator_mask,
             )
             surprises.append(s)
         logits = self.lm_head(self.final_norm(x))
