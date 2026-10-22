@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -22,8 +22,9 @@ def tricore_fused_scan(
     enable_fast_weight: bool,
     enable_adaptive_loop: bool,
     max_loops: int,
+    reset_mask: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """TriCore V10 JIT scan with a synaptic eligibility trace."""
+    """TriCore V11 JIT scan with a synaptic eligibility trace and optional delimiter reset."""
     B, L, D = u_feat.shape
     H = Q.shape[2]
     Dh = Q.shape[3]
@@ -80,6 +81,9 @@ def tricore_fused_scan(
                 recalled = r_hop.squeeze(-1).reshape(B, H * Dh)
             mem_list.append(recalled)
             prev_k = F.normalize((1.0 - elig_gate) * prev_k + elig_gate * k_t, p=2.0, dim=-2)
+            if reset_mask is not None:
+                reset_t = reset_mask[:, t].to(prev_k.dtype).view(B, 1, 1, 1)
+                prev_k = prev_k * (1.0 - reset_t)
     h_seq = torch.stack(h_list, dim=1)
     surprise_trace = torch.cat(surprise_list, dim=1)
     if enable_fast_weight:
@@ -166,6 +170,7 @@ class TriCoreBlock(nn.Module):
         enable_fast_weight: bool = True,
         enable_adaptive_loop: bool = True,
         separator_mask: torch.Tensor = None,
+        reset_mask: Optional[torch.Tensor] = None,
     ):
         squeeze_seq = False
         if x_t.dim() == 3:
@@ -256,6 +261,9 @@ class TriCoreBlock(nn.Module):
             prev_k_new = F.normalize(
                 (1.0 - elig_gate) * prev_k + elig_gate * k_t, p=2.0, dim=-2
             )
+            if reset_mask is not None:
+                reset_t = reset_mask.to(prev_k_new.dtype).view(B, 1, 1, 1)
+                prev_k_new = prev_k_new * (1.0 - reset_t)
             z = h_new + self.proj_out(recalled)
         else:
             F_new = F_mat
@@ -278,6 +286,7 @@ class TriCoreBlock(nn.Module):
         enable_fast_weight: bool = True,
         enable_adaptive_loop: bool = True,
         separator_mask: torch.Tensor = None,
+        reset_mask: Optional[torch.Tensor] = None,
     ):
         B, L, D = x.shape
         H, Dh = self.n_heads, self.d_head
@@ -331,6 +340,7 @@ class TriCoreBlock(nn.Module):
             enable_fast_weight=enable_fast_weight,
             enable_adaptive_loop=enable_adaptive_loop,
             max_loops=self.max_loops,
+            reset_mask=reset_mask,
         )
 
         if enable_fast_weight:
@@ -360,6 +370,7 @@ class TriCoreLM(nn.Module):
         enable_adaptive_loop: bool = True,
         separator_token: int = None,
         syntax_tokens: tuple = None,
+        reset_trace_tokens: tuple = None,
     ):
         super().__init__()
         self.enable_surprise_gate = enable_surprise_gate
@@ -370,10 +381,15 @@ class TriCoreLM(nn.Module):
         # architectural priors, not learned token embeddings.
         self.separator_token = separator_token
         self.syntax_tokens = syntax_tokens
+        self.reset_trace_tokens = reset_trace_tokens
         if syntax_tokens is not None:
             for tok_id in syntax_tokens:
                 if not 0 <= tok_id < vocab_size:
                     raise ValueError(f"syntax token {tok_id} outside vocabulary")
+        if reset_trace_tokens is not None:
+            for tok_id in reset_trace_tokens:
+                if not 0 <= tok_id < vocab_size:
+                    raise ValueError(f"reset token {tok_id} outside vocabulary")
         if separator_token is not None and not 0 <= separator_token < vocab_size:
             raise ValueError(f"separator token {separator_token} outside vocabulary")
         self.layers = nn.ModuleList([
@@ -398,6 +414,14 @@ class TriCoreLM(nn.Module):
                 write_sep_mask = write_sep_mask | (idx == tok_id)
         return (elig_sep_mask, write_sep_mask)
 
+    def _build_reset_mask(self, idx: torch.Tensor):
+        if self.reset_trace_tokens is None:
+            return None
+        reset_mask = torch.zeros_like(idx, dtype=torch.bool)
+        for tok_id in self.reset_trace_tokens:
+            reset_mask = reset_mask | (idx == tok_id)
+        return reset_mask
+
     def init_state(self, batch_size: int, device: torch.device, dtype: torch.dtype = torch.float32):
         return [layer.init_state(batch_size, device, dtype) for layer in self.layers]
 
@@ -408,6 +432,7 @@ class TriCoreLM(nn.Module):
             squeeze_seq = True
         x_t = self.embedding(idx_t)
         separator_mask = self._build_separator_mask(idx_t)
+        reset_mask = self._build_reset_mask(idx_t)
         new_states = []
         surprises = []
         for layer, st in zip(self.layers, states):
@@ -419,6 +444,7 @@ class TriCoreLM(nn.Module):
                 enable_fast_weight=self.enable_fast_weight,
                 enable_adaptive_loop=self.enable_adaptive_loop,
                 separator_mask=separator_mask,
+                reset_mask=reset_mask,
             )
             new_states.append(n_st)
             surprises.append(s_t)
@@ -432,6 +458,7 @@ class TriCoreLM(nn.Module):
     def forward(self, idx: torch.Tensor):
         x = self.embedding(idx)
         separator_mask = self._build_separator_mask(idx)
+        reset_mask = self._build_reset_mask(idx)
         surprises = []
         for layer in self.layers:
             x, s = layer(
@@ -440,6 +467,7 @@ class TriCoreLM(nn.Module):
                 enable_fast_weight=self.enable_fast_weight,
                 enable_adaptive_loop=self.enable_adaptive_loop,
                 separator_mask=separator_mask,
+                reset_mask=reset_mask,
             )
             surprises.append(s)
         logits = self.lm_head(self.final_norm(x))

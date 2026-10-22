@@ -1,0 +1,1085 @@
+{
+  "version": "1.4.0",
+  "device": "cuda",
+  "gpu": "NVIDIA GeForce RTX 3060",
+  "started_at_unix": 1792678657.8008635,
+  "protocol": {
+    "track5_steps": 350,
+    "track6_steps": 500,
+    "seeds": [
+      42,
+      100,
+      2026
+    ],
+    "batch_size": 64,
+    "learning_rate": 0.003,
+    "weight_decay": 0.01
+  },
+  "track4a_reference": {
+    "protocol": {
+      "num_kv_pairs": 4,
+      "num_queries": 4,
+      "noise_len": 8,
+      "ood_noise_len": 32,
+      "d_model": 64,
+      "d_fast": 16,
+      "max_loops": 2,
+      "chance_level": 25.0
+    },
+    "summary": [
+      {
+        "name": "TriCore Full",
+        "params": 56655,
+        "in_mean": 100.0,
+        "in_std": 0.0,
+        "ood_mean": 100.0,
+        "ood_std": 0.0,
+        "train_mean": 59.59832859999975,
+        "seeds": [
+          42,
+          100,
+          2026
+        ],
+        "per_seed": [
+          {
+            "seed": 42,
+            "in_acc": 100.0,
+            "ood_acc": 100.0
+          },
+          {
+            "seed": 100,
+            "in_acc": 100.0,
+            "ood_acc": 100.0
+          },
+          {
+            "seed": 2026,
+            "in_acc": 100.0,
+            "ood_acc": 100.0
+          }
+        ]
+      },
+      {
+        "name": "No Engine I: Surprise Gate",
+        "params": 56655,
+        "in_mean": 5.651041666666667,
+        "in_std": 0.19661027175184245,
+        "ood_mean": 5.546875,
+        "ood_std": 0.8267972847076851,
+        "train_mean": 48.521682666668006,
+        "seeds": [
+          42,
+          100,
+          2026
+        ],
+        "per_seed": [
+          {
+            "seed": 42,
+            "in_acc": 5.625,
+            "ood_acc": 4.921875
+          },
+          {
+            "seed": 100,
+            "in_acc": 5.46875,
+            "ood_acc": 5.234375
+          },
+          {
+            "seed": 2026,
+            "in_acc": 5.859375,
+            "ood_acc": 6.484375000000001
+          }
+        ]
+      },
+      {
+        "name": "No Engine II: Fast-Weight",
+        "params": 56655,
+        "in_mean": 5.546875,
+        "in_std": 0.34053897996411514,
+        "ood_mean": 5.3125,
+        "ood_std": 0.9472152853892293,
+        "train_mean": 9.394738466665634,
+        "seeds": [
+          42,
+          100,
+          2026
+        ],
+        "per_seed": [
+          {
+            "seed": 42,
+            "in_acc": 5.703125,
+            "ood_acc": 4.765625
+          },
+          {
+            "seed": 100,
+            "in_acc": 5.15625,
+            "ood_acc": 4.765625
+          },
+          {
+            "seed": 2026,
+            "in_acc": 5.78125,
+            "ood_acc": 6.406249999999999
+          }
+        ]
+      },
+      {
+        "name": "No Engine III: Adaptive Loop",
+        "params": 56655,
+        "in_mean": 23.411458333333332,
+        "in_std": 1.0778230253424415,
+        "ood_mean": 23.541666666666668,
+        "ood_std": 2.7336308511224288,
+        "train_mean": 26.022535533331393,
+        "seeds": [
+          42,
+          100,
+          2026
+        ],
+        "per_seed": [
+          {
+            "seed": 42,
+            "in_acc": 24.21875,
+            "ood_acc": 24.453125
+          },
+          {
+            "seed": 100,
+            "in_acc": 23.828125,
+            "ood_acc": 25.703125
+          },
+          {
+            "seed": 2026,
+            "in_acc": 22.1875,
+            "ood_acc": 20.46875
+          }
+        ]
+      },
+      {
+        "name": "Vanilla Transformer 2-Layer",
+        "params": 83456,
+        "in_mean": 25.078125,
+        "in_std": 0.4752158226795464,
+        "ood_mean": 22.239583333333332,
+        "ood_std": 3.956191169257158,
+        "train_mean": 2.008949733331974,
+        "seeds": [
+          42,
+          100,
+          2026
+        ],
+        "per_seed": [
+          {
+            "seed": 42,
+            "in_acc": 24.84375,
+            "ood_acc": 23.203125
+          },
+          {
+            "seed": 100,
+            "in_acc": 25.624999999999996,
+            "ood_acc": 17.890625
+          },
+          {
+            "seed": 2026,
+            "in_acc": 24.765625,
+            "ood_acc": 25.624999999999996
+          }
+        ]
+      }
+    ],
+    "runs": [
+      {
+        "name": "TriCore Full",
+        "seed": 42,
+        "params": 56655,
+        "train_loss": 0.00466030603274703,
+        "in_loss": 0.004489328432828188,
+        "in_acc": 100.0,
+        "ood_loss": 0.005545107554644347,
+        "ood_acc": 100.0,
+        "train_time": 60.29608829999779
+      },
+      {
+        "name": "No Engine I: Surprise Gate",
+        "seed": 42,
+        "params": 56655,
+        "train_loss": 3.0015885829925537,
+        "in_loss": 3.0008269786834716,
+        "in_acc": 5.625,
+        "ood_loss": 3.001431131362915,
+        "ood_acc": 4.921875,
+        "train_time": 49.98746460000257
+      },
+      {
+        "name": "No Engine II: Fast-Weight",
+        "seed": 42,
+        "params": 56655,
+        "train_loss": 3.001615285873413,
+        "in_loss": 3.0006057262420653,
+        "in_acc": 5.703125,
+        "ood_loss": 3.002290439605713,
+        "ood_acc": 4.765625,
+        "train_time": 9.676884900000005
+      },
+      {
+        "name": "No Engine III: Adaptive Loop",
+        "seed": 42,
+        "params": 56655,
+        "train_loss": 1.9405364990234375,
+        "in_loss": 1.9251160144805908,
+        "in_acc": 24.21875,
+        "ood_loss": 2.0674089908599855,
+        "ood_acc": 24.453125,
+        "train_time": 27.613423599999805
+      },
+      {
+        "name": "Vanilla Transformer 2-Layer",
+        "seed": 42,
+        "params": 83456,
+        "train_loss": 1.5327966213226318,
+        "in_loss": 1.5314220190048218,
+        "in_acc": 24.84375,
+        "ood_loss": 2.017484998703003,
+        "ood_acc": 23.203125,
+        "train_time": 1.989216399997531
+      },
+      {
+        "name": "TriCore Full",
+        "seed": 100,
+        "params": 56655,
+        "train_loss": 0.004697490017861128,
+        "in_loss": 0.0046238919720053675,
+        "in_acc": 100.0,
+        "ood_loss": 0.012479978986084462,
+        "ood_acc": 100.0,
+        "train_time": 56.39317860000301
+      },
+      {
+        "name": "No Engine I: Surprise Gate",
+        "seed": 100,
+        "params": 56655,
+        "train_loss": 3.000178098678589,
+        "in_loss": 3.0014527320861815,
+        "in_acc": 5.46875,
+        "ood_loss": 2.999539613723755,
+        "ood_acc": 5.234375,
+        "train_time": 50.188377200000104
+      },
+      {
+        "name": "No Engine II: Fast-Weight",
+        "seed": 100,
+        "params": 56655,
+        "train_loss": 2.9999148845672607,
+        "in_loss": 3.0009031295776367,
+        "in_acc": 5.15625,
+        "ood_loss": 3.000107765197754,
+        "ood_acc": 4.765625,
+        "train_time": 10.291748900002858
+      },
+      {
+        "name": "No Engine III: Adaptive Loop",
+        "seed": 100,
+        "params": 56655,
+        "train_loss": 1.7521690130233765,
+        "in_loss": 1.7505844116210938,
+        "in_acc": 23.828125,
+        "ood_loss": 1.8046891927719115,
+        "ood_acc": 25.703125,
+        "train_time": 27.621327199994994
+      },
+      {
+        "name": "Vanilla Transformer 2-Layer",
+        "seed": 100,
+        "params": 83456,
+        "train_loss": 1.7975468635559082,
+        "in_loss": 1.7966373920440675,
+        "in_acc": 25.624999999999996,
+        "ood_loss": 3.2209283351898192,
+        "ood_acc": 17.890625,
+        "train_time": 1.980806899999152
+      },
+      {
+        "name": "TriCore Full",
+        "seed": 2026,
+        "params": 56655,
+        "train_loss": 0.0050170039758086205,
+        "in_loss": 0.00511435754597187,
+        "in_acc": 100.0,
+        "ood_loss": 0.015037322416901588,
+        "ood_acc": 100.0,
+        "train_time": 62.105718899998465
+      },
+      {
+        "name": "No Engine I: Surprise Gate",
+        "seed": 2026,
+        "params": 56655,
+        "train_loss": 3.0006844997406006,
+        "in_loss": 2.9975470542907714,
+        "in_acc": 5.859375,
+        "ood_loss": 2.9992236137390136,
+        "ood_acc": 6.484375000000001,
+        "train_time": 45.389206200001354
+      },
+      {
+        "name": "No Engine II: Fast-Weight",
+        "seed": 2026,
+        "params": 56655,
+        "train_loss": 3.000511646270752,
+        "in_loss": 2.9978840351104736,
+        "in_acc": 5.78125,
+        "ood_loss": 2.9989967823028563,
+        "ood_acc": 6.406249999999999,
+        "train_time": 8.215581599994039
+      },
+      {
+        "name": "No Engine III: Adaptive Loop",
+        "seed": 2026,
+        "params": 56655,
+        "train_loss": 2.3336381912231445,
+        "in_loss": 2.28595609664917,
+        "in_acc": 22.1875,
+        "ood_loss": 2.362812376022339,
+        "ood_acc": 20.46875,
+        "train_time": 22.83285579999938
+      },
+      {
+        "name": "Vanilla Transformer 2-Layer",
+        "seed": 2026,
+        "params": 83456,
+        "train_loss": 1.5705149173736572,
+        "in_loss": 1.569189691543579,
+        "in_acc": 24.765625,
+        "ood_loss": 1.88368661403656,
+        "ood_acc": 25.624999999999996,
+        "train_time": 2.0568258999992395
+      }
+    ]
+  },
+  "track4a_welch_vs_full": {
+    "No Engine I: Surprise Gate": {
+      "in_domain": {
+        "n_x": 3,
+        "n_y": 3,
+        "mean_x": 100.0,
+        "mean_y": 5.651041666666667,
+        "sample_std_x": 0.0,
+        "sample_std_y": 0.19661027175184245,
+        "population_std_x": 0.0,
+        "population_std_y": 0.16053161466065044,
+        "mean_difference": 94.34895833333333,
+        "t_statistic": 831.1732038130452,
+        "degrees_of_freedom": 2.0,
+        "p_value_two_tailed": 1.4474913926646058e-06
+      },
+      "ood_4x": {
+        "n_x": 3,
+        "n_y": 3,
+        "mean_x": 100.0,
+        "mean_y": 5.546875,
+        "sample_std_x": 0.0,
+        "sample_std_y": 0.8267972847076851,
+        "population_std_x": 0.0,
+        "population_std_y": 0.6750771560841525,
+        "mean_difference": 94.453125,
+        "t_statistic": 197.86907197148597,
+        "degrees_of_freedom": 2.0,
+        "p_value_two_tailed": 2.5540390192915477e-05
+      }
+    },
+    "No Engine II: Fast-Weight": {
+      "in_domain": {
+        "n_x": 3,
+        "n_y": 3,
+        "mean_x": 100.0,
+        "mean_y": 5.546875,
+        "sample_std_x": 0.0,
+        "sample_std_y": 0.34053897996411514,
+        "population_std_x": 0.0,
+        "population_std_y": 0.2780489128133154,
+        "mean_difference": 94.453125,
+        "t_statistic": 480.40788590749133,
+        "degrees_of_freedom": 2.0,
+        "p_value_two_tailed": 4.332882599540095e-06
+      },
+      "ood_4x": {
+        "n_x": 3,
+        "n_y": 3,
+        "mean_x": 100.0,
+        "mean_y": 5.3125,
+        "sample_std_x": 0.0,
+        "sample_std_y": 0.9472152853892293,
+        "population_std_x": 0.0,
+        "population_std_y": 0.7733980419227859,
+        "mean_difference": 94.6875,
+        "t_statistic": 173.14285714285722,
+        "degrees_of_freedom": 2.0,
+        "p_value_two_tailed": 3.335562715463195e-05
+      }
+    },
+    "No Engine III: Adaptive Loop": {
+      "in_domain": {
+        "n_x": 3,
+        "n_y": 3,
+        "mean_x": 100.0,
+        "mean_y": 23.411458333333332,
+        "sample_std_x": 0.0,
+        "sample_std_y": 1.0778230253424415,
+        "population_std_x": 0.0,
+        "population_std_y": 0.8800388150372813,
+        "mean_difference": 76.58854166666667,
+        "t_statistic": 123.07701944122593,
+        "degrees_of_freedom": 2.0,
+        "p_value_two_tailed": 6.60089852704601e-05
+      },
+      "ood_4x": {
+        "n_x": 3,
+        "n_y": 3,
+        "mean_x": 100.0,
+        "mean_y": 23.541666666666668,
+        "sample_std_x": 0.0,
+        "sample_std_y": 2.7336308511224288,
+        "population_std_x": 0.0,
+        "population_std_y": 2.232000243460013,
+        "mean_difference": 76.45833333333333,
+        "t_statistic": 48.44462372854578,
+        "degrees_of_freedom": 2.0,
+        "p_value_two_tailed": 0.00042582519760949757
+      }
+    },
+    "Vanilla Transformer 2-Layer": {
+      "in_domain": {
+        "n_x": 3,
+        "n_y": 3,
+        "mean_x": 100.0,
+        "mean_y": 25.078125,
+        "sample_std_x": 0.0,
+        "sample_std_y": 0.4752158226795464,
+        "population_std_x": 0.0,
+        "population_std_y": 0.38801209442060614,
+        "mean_difference": 74.921875,
+        "t_statistic": 273.0727553779951,
+        "degrees_of_freedom": 2.0,
+        "p_value_two_tailed": 1.3410177274085404e-05
+      },
+      "ood_4x": {
+        "n_x": 3,
+        "n_y": 3,
+        "mean_x": 100.0,
+        "mean_y": 22.239583333333332,
+        "sample_std_x": 0.0,
+        "sample_std_y": 3.956191169257158,
+        "population_std_x": 0.0,
+        "population_std_y": 3.2302165631949324,
+        "mean_difference": 77.76041666666667,
+        "t_statistic": 34.04410624314744,
+        "degrees_of_freedom": 2.0,
+        "p_value_two_tailed": 0.0008616968355155553
+      }
+    }
+  },
+  "track5": {
+    "protocol": {
+      "seeds": [
+        42,
+        100,
+        2026
+      ],
+      "steps": 350,
+      "batch_size": 64,
+      "learning_rate": 0.003,
+      "weight_decay": 0.01,
+      "d_model": 64,
+      "d_fast": 16,
+      "max_loops": 2,
+      "eval_batches": 10,
+      "test": "infix EQ two-hop dereference",
+      "chance_pct": 25.0,
+      "chance_note": "25.0% is the four-way chance after the four SET literals are identified; uniform chance over all 16 literals is 6.25%."
+    },
+    "models": {
+      "TriCore V11 Full (with eligibility trace)": {
+        "params": 60819,
+        "runs": [
+          {
+            "seed": 42,
+            "params": 60819,
+            "train_loss_last": 0.002081323182210326,
+            "val_loss": 0.002088210405781865,
+            "accuracy_pct": 100.0,
+            "mean_elig_gate_eq": 0.003636415582150221,
+            "mean_elig_gate_entity": 0.9010552167892456,
+            "train_time_s": 161.53052579999894
+          },
+          {
+            "seed": 100,
+            "params": 60819,
+            "train_loss_last": 0.002424913691356778,
+            "val_loss": 0.0024319590302184224,
+            "accuracy_pct": 100.0,
+            "mean_elig_gate_eq": 0.003172988072037697,
+            "mean_elig_gate_entity": 0.9075610041618347,
+            "train_time_s": 156.40843470000073
+          },
+          {
+            "seed": 2026,
+            "params": 60819,
+            "train_loss_last": 0.001941879978403449,
+            "val_loss": 0.0020170860458165406,
+            "accuracy_pct": 100.0,
+            "mean_elig_gate_eq": 0.00287260627374053,
+            "mean_elig_gate_entity": 0.9074686765670776,
+            "train_time_s": 150.84103979999963
+          }
+        ],
+        "accuracy_mean": 100.0,
+        "accuracy_std": 0.0,
+        "val_loss_mean": 0.0021790851606056094,
+        "val_loss_std": 0.00022186384134157086,
+        "elig_gate_eq_mean": 0.003227336642642816,
+        "elig_gate_eq_std": 0.00038479408811523764,
+        "elig_gate_entity_mean": 0.9053616325060526,
+        "elig_gate_entity_std": 0.003729751109747201
+      },
+      "TriCore V11 Fair No-Engine-I (unmodulated gates)": {
+        "params": 60819,
+        "runs": [
+          {
+            "seed": 42,
+            "params": 60819,
+            "train_loss_last": 1.4879988431930542,
+            "val_loss": 1.4884342312812806,
+            "accuracy_pct": 24.1796875,
+            "mean_elig_gate_eq": 1.0,
+            "mean_elig_gate_entity": 1.0,
+            "train_time_s": 129.53427469999951
+          },
+          {
+            "seed": 100,
+            "params": 60819,
+            "train_loss_last": 1.4557610750198364,
+            "val_loss": 1.4518913507461548,
+            "accuracy_pct": 26.09375,
+            "mean_elig_gate_eq": 1.0,
+            "mean_elig_gate_entity": 1.0,
+            "train_time_s": 126.68354519999957
+          },
+          {
+            "seed": 2026,
+            "params": 60819,
+            "train_loss_last": 1.467780351638794,
+            "val_loss": 1.4642893433570863,
+            "accuracy_pct": 24.140625,
+            "mean_elig_gate_eq": 1.0,
+            "mean_elig_gate_entity": 1.0,
+            "train_time_s": 130.8230480000002
+          }
+        ],
+        "accuracy_mean": 24.8046875,
+        "accuracy_std": 1.1165317131215977,
+        "val_loss_mean": 1.4682049751281738,
+        "val_loss_std": 0.018583451201974882,
+        "elig_gate_eq_mean": 1.0,
+        "elig_gate_eq_std": 0.0,
+        "elig_gate_entity_mean": 1.0,
+        "elig_gate_entity_std": 0.0
+      },
+      "Vanilla Transformer (2-layer)": {
+        "params": 83456,
+        "runs": [
+          {
+            "seed": 42,
+            "params": 83456,
+            "train_loss_last": 1.4291658401489258,
+            "val_loss": 1.4349063515663147,
+            "accuracy_pct": 25.46875,
+            "mean_elig_gate_eq": null,
+            "mean_elig_gate_entity": null,
+            "train_time_s": 15.067610199999763
+          },
+          {
+            "seed": 100,
+            "params": 83456,
+            "train_loss_last": 1.4374455213546753,
+            "val_loss": 1.4358063220977784,
+            "accuracy_pct": 24.296875,
+            "mean_elig_gate_eq": null,
+            "mean_elig_gate_entity": null,
+            "train_time_s": 14.386913599999389
+          },
+          {
+            "seed": 2026,
+            "params": 83456,
+            "train_loss_last": 1.4557982683181763,
+            "val_loss": 1.4482420206069946,
+            "accuracy_pct": 25.2734375,
+            "mean_elig_gate_eq": null,
+            "mean_elig_gate_entity": null,
+            "train_time_s": 14.960970799998904
+          }
+        ],
+        "accuracy_mean": 25.013020833333332,
+        "accuracy_std": 0.6278418464188121,
+        "val_loss_mean": 1.4396515647570292,
+        "val_loss_std": 0.007453149369362505,
+        "elig_gate_eq_mean": null,
+        "elig_gate_eq_std": null,
+        "elig_gate_entity_mean": null,
+        "elig_gate_entity_std": null
+      }
+    },
+    "significance": {
+      "full_vs_fair_no_engine_i_accuracy": {
+        "n_x": 3,
+        "n_y": 3,
+        "mean_x": 100.0,
+        "mean_y": 24.8046875,
+        "sample_std_x": 0.0,
+        "sample_std_y": 1.1165317131215977,
+        "population_std_x": 0.0,
+        "population_std_y": 0.9116443262611613,
+        "mean_difference": 75.1953125,
+        "t_statistic": 116.64881544375342,
+        "degrees_of_freedom": 2.0,
+        "p_value_two_tailed": 7.348377549770864e-05
+      },
+      "full_vs_transformer_accuracy": {
+        "n_x": 3,
+        "n_y": 3,
+        "mean_x": 100.0,
+        "mean_y": 25.013020833333332,
+        "sample_std_x": 0.0,
+        "sample_std_y": 0.6278418464188121,
+        "population_std_x": 0.0,
+        "population_std_y": 0.5126307209643106,
+        "mean_difference": 74.98697916666667,
+        "t_statistic": 206.86938687443936,
+        "degrees_of_freedom": 2.0,
+        "p_value_two_tailed": 2.3366427786071086e-05
+      },
+      "full_vs_fair_no_engine_i_loss": {
+        "n_x": 3,
+        "n_y": 3,
+        "mean_x": 0.0021790851606056094,
+        "mean_y": 1.4682049751281738,
+        "sample_std_x": 0.00022186384134157086,
+        "sample_std_y": 0.018583451201974882,
+        "population_std_x": 0.00018115106788688408,
+        "population_std_y": 0.015173324368249733,
+        "mean_difference": -1.4660258899675682,
+        "t_statistic": -136.62964721766744,
+        "degrees_of_freedom": 2.0005701384037353,
+        "p_value_two_tailed": 5.3434216967198734e-05
+      },
+      "full_vs_transformer_loss": {
+        "n_x": 3,
+        "n_y": 3,
+        "mean_x": 0.0021790851606056094,
+        "mean_y": 1.4396515647570292,
+        "sample_std_x": 0.00022186384134157086,
+        "sample_std_y": 0.007453149369362505,
+        "population_std_x": 0.00018115106788688408,
+        "population_std_y": 0.006085470977228123,
+        "mean_difference": -1.4374724795964235,
+        "t_statistic": -333.90890968585677,
+        "degrees_of_freedom": 2.0035444842944927,
+        "p_value_two_tailed": 8.806430075604236e-06
+      }
+    }
+  },
+  "track6": {
+    "protocol": {
+      "steps": 500,
+      "batch_size": 64,
+      "learning_rate": 0.003,
+      "weight_decay": 0.01,
+      "optimizer": "AdamW + cosine annealing + grad clip 1.0",
+      "seed": 42,
+      "num_chains": 4,
+      "num_queries": 4,
+      "vocab_size": 96,
+      "noise_len": 12,
+      "sequence_len": 68,
+      "ood_noise_len": 48,
+      "ood_sequence_len": 104,
+      "eval_seed_in_domain": 6101,
+      "eval_seed_ood": 6102,
+      "eval_batches": 8,
+      "chance_pct": 25.0,
+      "task": "single-step k -> m1 -> m2 -> m3 -> v pointer chain"
+    },
+    "models": {
+      "TriCore Full (1-Layer, max_loops=3, 4-Hop capable)": {
+        "name": "TriCore Full (1-Layer, max_loops=3, 4-Hop capable)",
+        "seed": 42,
+        "params": 236436,
+        "train_loss_last50": 0.0011164401657879353,
+        "in_loss": 0.0011694042332237586,
+        "in_accuracy_pct": 100.0,
+        "ood_loss": 0.0012203107398818247,
+        "ood_accuracy_pct": 100.0,
+        "train_time_s": 214.19174510000084,
+        "hop_router_query_weights": [
+          0.0045134534501301005,
+          0.00370510741903729,
+          0.0034111295493204352,
+          0.9883703269006219
+        ],
+        "state_bytes_per_sample": 17408
+      },
+      "TriCore (1-Layer, max_loops=2, 3-Hop limit)": {
+        "name": "TriCore (1-Layer, max_loops=2, 3-Hop limit)",
+        "seed": 42,
+        "params": 232211,
+        "train_loss_last50": 1.412400484085083,
+        "in_loss": 1.4111799746751785,
+        "in_accuracy_pct": 24.951171875,
+        "ood_loss": 1.4249307066202164,
+        "ood_accuracy_pct": 24.755859375,
+        "train_time_s": 184.03071330000057,
+        "hop_router_query_weights": [
+          0.001868669841730508,
+          0.9970106371911243,
+          0.0011206999051580624,
+          0.0
+        ],
+        "state_bytes_per_sample": 17408
+      },
+      "TriCore (1-Layer, max_loops=1, 2-Hop limit)": {
+        "name": "TriCore (1-Layer, max_loops=1, 2-Hop limit)",
+        "seed": 42,
+        "params": 227986,
+        "train_loss_last50": 1.4086440801620483,
+        "in_loss": 1.4081025570631027,
+        "in_accuracy_pct": 25.732421875,
+        "ood_loss": 1.4220545887947083,
+        "ood_accuracy_pct": 26.26953125,
+        "train_time_s": 148.78001330000006,
+        "hop_router_query_weights": [
+          0.01938264368442333,
+          0.9806173711258452,
+          0.0,
+          0.0
+        ],
+        "state_bytes_per_sample": 17408
+      },
+      "Vanilla Transformer (2-Layer, d_model=128, 4 heads)": {
+        "name": "Vanilla Transformer (2-Layer, d_model=128, 4 heads)",
+        "seed": 42,
+        "params": 306176,
+        "train_loss_last50": 1.4455589056015015,
+        "in_loss": 1.4471548795700073,
+        "in_accuracy_pct": 24.4140625,
+        "ood_loss": 2.079394042491913,
+        "ood_accuracy_pct": 25.78125,
+        "train_time_s": 4.043488199999047,
+        "hop_router_query_weights": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "state_bytes_per_sample": null
+      }
+    },
+    "hop_router": {
+      "query_position_softmax_mean": [
+        0.0045134534501301005,
+        0.00370510741903729,
+        0.0034111295493204352,
+        0.9883703269006219
+      ],
+      "slots": [
+        "hop_1",
+        "hop_2",
+        "hop_3",
+        "hop_4"
+      ]
+    },
+    "significance_note": "Track 6 is a single seed; no significance test is claimed.",
+    "full_vs_transformer_4hop_ood": {
+      "full_pct": 100.0,
+      "transformer_pct": 25.78125,
+      "note": "single seed; controlled comparison only"
+    },
+    "depth_reference": {
+      "two_hop": {
+        "full_v9_ood_pct": 100.0,
+        "one_hop_limit_ood_pct": 20.46875,
+        "transformer_v9_ood_pct": 22.239583333333332
+      },
+      "three_hop_v7": {
+        "full_ood_pct": 100.0,
+        "two_hop_limit_ood_pct": 23.91,
+        "transformer_ood_pct": 23.44
+      },
+      "four_hop_v11": {
+        "full_ood_pct": 100.0,
+        "three_hop_limit_ood_pct": 24.755859375,
+        "transformer_ood_pct": 25.78125
+      },
+      "two_hop_shallow_probe": {
+        "name": "TriCore 1-Hop readout (max_loops=0)",
+        "params": 58641,
+        "in_accuracy_pct": 22.890625,
+        "ood_accuracy_pct": 20.46875,
+        "in_loss": 2.3409409046173097,
+        "ood_loss": 2.3483794212341307,
+        "train_time_s": 48.56356059999962
+      }
+    },
+    "track4a_welch_vs_full": {
+      "No Engine I: Surprise Gate": {
+        "in_domain": {
+          "n_x": 3,
+          "n_y": 3,
+          "mean_x": 100.0,
+          "mean_y": 5.651041666666667,
+          "sample_std_x": 0.0,
+          "sample_std_y": 0.19661027175184245,
+          "population_std_x": 0.0,
+          "population_std_y": 0.16053161466065044,
+          "mean_difference": 94.34895833333333,
+          "t_statistic": 831.1732038130452,
+          "degrees_of_freedom": 2.0,
+          "p_value_two_tailed": 1.4474913926646058e-06
+        },
+        "ood_4x": {
+          "n_x": 3,
+          "n_y": 3,
+          "mean_x": 100.0,
+          "mean_y": 5.546875,
+          "sample_std_x": 0.0,
+          "sample_std_y": 0.8267972847076851,
+          "population_std_x": 0.0,
+          "population_std_y": 0.6750771560841525,
+          "mean_difference": 94.453125,
+          "t_statistic": 197.86907197148597,
+          "degrees_of_freedom": 2.0,
+          "p_value_two_tailed": 2.5540390192915477e-05
+        }
+      },
+      "No Engine II: Fast-Weight": {
+        "in_domain": {
+          "n_x": 3,
+          "n_y": 3,
+          "mean_x": 100.0,
+          "mean_y": 5.546875,
+          "sample_std_x": 0.0,
+          "sample_std_y": 0.34053897996411514,
+          "population_std_x": 0.0,
+          "population_std_y": 0.2780489128133154,
+          "mean_difference": 94.453125,
+          "t_statistic": 480.40788590749133,
+          "degrees_of_freedom": 2.0,
+          "p_value_two_tailed": 4.332882599540095e-06
+        },
+        "ood_4x": {
+          "n_x": 3,
+          "n_y": 3,
+          "mean_x": 100.0,
+          "mean_y": 5.3125,
+          "sample_std_x": 0.0,
+          "sample_std_y": 0.9472152853892293,
+          "population_std_x": 0.0,
+          "population_std_y": 0.7733980419227859,
+          "mean_difference": 94.6875,
+          "t_statistic": 173.14285714285722,
+          "degrees_of_freedom": 2.0,
+          "p_value_two_tailed": 3.335562715463195e-05
+        }
+      },
+      "No Engine III: Adaptive Loop": {
+        "in_domain": {
+          "n_x": 3,
+          "n_y": 3,
+          "mean_x": 100.0,
+          "mean_y": 23.411458333333332,
+          "sample_std_x": 0.0,
+          "sample_std_y": 1.0778230253424415,
+          "population_std_x": 0.0,
+          "population_std_y": 0.8800388150372813,
+          "mean_difference": 76.58854166666667,
+          "t_statistic": 123.07701944122593,
+          "degrees_of_freedom": 2.0,
+          "p_value_two_tailed": 6.60089852704601e-05
+        },
+        "ood_4x": {
+          "n_x": 3,
+          "n_y": 3,
+          "mean_x": 100.0,
+          "mean_y": 23.541666666666668,
+          "sample_std_x": 0.0,
+          "sample_std_y": 2.7336308511224288,
+          "population_std_x": 0.0,
+          "population_std_y": 2.232000243460013,
+          "mean_difference": 76.45833333333333,
+          "t_statistic": 48.44462372854578,
+          "degrees_of_freedom": 2.0,
+          "p_value_two_tailed": 0.00042582519760949757
+        }
+      },
+      "Vanilla Transformer 2-Layer": {
+        "in_domain": {
+          "n_x": 3,
+          "n_y": 3,
+          "mean_x": 100.0,
+          "mean_y": 25.078125,
+          "sample_std_x": 0.0,
+          "sample_std_y": 0.4752158226795464,
+          "population_std_x": 0.0,
+          "population_std_y": 0.38801209442060614,
+          "mean_difference": 74.921875,
+          "t_statistic": 273.0727553779951,
+          "degrees_of_freedom": 2.0,
+          "p_value_two_tailed": 1.3410177274085404e-05
+        },
+        "ood_4x": {
+          "n_x": 3,
+          "n_y": 3,
+          "mean_x": 100.0,
+          "mean_y": 22.239583333333332,
+          "sample_std_x": 0.0,
+          "sample_std_y": 3.956191169257158,
+          "population_std_x": 0.0,
+          "population_std_y": 3.2302165631949324,
+          "mean_difference": 77.76041666666667,
+          "t_statistic": 34.04410624314744,
+          "degrees_of_freedom": 2.0,
+          "p_value_two_tailed": 0.0008616968355155553
+        }
+      }
+    }
+  },
+  "track4b": {
+    "device": "cuda",
+    "lengths": [
+      128,
+      512,
+      2048,
+      8192,
+      16384,
+      32768,
+      65536,
+      131072
+    ],
+    "state_config": {
+      "d_model": 128,
+      "n_heads": 4,
+      "d_head": 32,
+      "n_layers": 1
+    },
+    "baseline_config": {
+      "n_layers": 2,
+      "d_model": 128,
+      "n_heads": 4,
+      "d_head": 32
+    },
+    "rows": [
+      {
+        "length": 128,
+        "state_tensor_bytes": 17408,
+        "state_alloc_bytes": 17408,
+        "cache_tensor_bytes": 262144,
+        "cache_alloc_bytes": 262144,
+        "tri_ms_per_token": 2.971493750010268,
+        "transformer_ms_per_token": 1.4151875000152359,
+        "reduction": 15.058823529411764,
+        "latency_ratio_transformer_over_tricore": 0.47625457735199533,
+        "timed_steps": 32,
+        "warmup_steps": 8
+      },
+      {
+        "length": 512,
+        "state_tensor_bytes": 17408,
+        "state_alloc_bytes": 17408,
+        "cache_tensor_bytes": 1048576,
+        "cache_alloc_bytes": 1048576,
+        "tri_ms_per_token": 2.571146874970509,
+        "transformer_ms_per_token": 1.387449999981527,
+        "reduction": 60.23529411764706,
+        "latency_ratio_transformer_over_tricore": 0.5396230038384878,
+        "timed_steps": 32,
+        "warmup_steps": 8
+      },
+      {
+        "length": 2048,
+        "state_tensor_bytes": 17408,
+        "state_alloc_bytes": 17408,
+        "cache_tensor_bytes": 4194304,
+        "cache_alloc_bytes": 4194304,
+        "tri_ms_per_token": 2.8656843750241023,
+        "transformer_ms_per_token": 1.5491218750298685,
+        "reduction": 240.94117647058823,
+        "latency_ratio_transformer_over_tricore": 0.5405765856600447,
+        "timed_steps": 32,
+        "warmup_steps": 8
+      },
+      {
+        "length": 8192,
+        "state_tensor_bytes": 17408,
+        "state_alloc_bytes": 17408,
+        "cache_tensor_bytes": 16777216,
+        "cache_alloc_bytes": 16908288,
+        "tri_ms_per_token": 2.9224124999700507,
+        "transformer_ms_per_token": 3.864849999956732,
+        "reduction": 963.7647058823529,
+        "latency_ratio_transformer_over_tricore": 1.3224861308923157,
+        "timed_steps": 32,
+        "warmup_steps": 8
+      },
+      {
+        "length": 16384,
+        "state_tensor_bytes": 17408,
+        "state_alloc_bytes": 17408,
+        "cache_tensor_bytes": 33554432,
+        "cache_alloc_bytes": 33554432,
+        "tri_ms_per_token": 3.4079656250014523,
+        "transformer_ms_per_token": 5.421196874976886,
+        "reduction": 1927.5294117647059,
+        "latency_ratio_transformer_over_tricore": 1.5907428276875815,
+        "timed_steps": 32,
+        "warmup_steps": 8
+      },
+      {
+        "length": 32768,
+        "state_tensor_bytes": 17408,
+        "state_alloc_bytes": 17408,
+        "cache_tensor_bytes": 67108864,
+        "cache_alloc_bytes": 67108864,
+        "tri_ms_per_token": 2.7666406249977626,
+        "transformer_ms_per_token": 9.735362500009614,
+        "reduction": 3855.0588235294117,
+        "latency_ratio_transformer_over_tricore": 3.5188388444984566,
+        "timed_steps": 32,
+        "warmup_steps": 8
+      },
+      {
+        "length": 65536,
+        "state_tensor_bytes": 17408,
+        "state_alloc_bytes": 17408,
+        "cache_tensor_bytes": 134217728,
+        "cache_alloc_bytes": 134217728,
+        "tri_ms_per_token": 2.718537500072671,
+        "transformer_ms_per_token": 18.275156249956126,
+        "reduction": 7710.117647058823,
+        "latency_ratio_transformer_over_tricore": 6.722421982211981,
+        "timed_steps": 16,
+        "warmup_steps": 4
+      },
+      {
+        "length": 131072,
+        "state_tensor_bytes": 17408,
+        "state_alloc_bytes": 17408,
+        "cache_tensor_bytes": 268435456,
+        "cache_alloc_bytes": 268435456,
+        "tri_ms_per_token": 2.737456249974457,
+        "transformer_ms_per_token": 35.54826250001497,
+        "reduction": 15420.235294117647,
+        "latency_ratio_transformer_over_tricore": 12.985874203595644,
+        "timed_steps": 16,
+        "warmup_steps": 4
+      }
+    ]
+  },
+  "runtime_seconds": 1556.8083098999996,
+  "figures": [
+    "results\\tricore_vs_transformer.png",
+    "results\\tricore_v11_masterpiece.png"
+  ]
+}

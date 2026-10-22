@@ -1,4 +1,51 @@
-# TriCore V10
+# TriCore V11
+
+## V11 (v1.4.0) — Four-Hop Chained Recall, Three-Seed Welch Tests, and 128K CUDA Profiling
+
+**Release focus.** V11 is an evaluation-and-operator release built on the V10 synaptic core, with one additive delimiter prior:
+
+1. **Track 6 — single-forward four-hop recall.** A shuffled four-tier fact layout is followed by a 12-token adversarial distractor gap and four `[key, 0]` queries. The target requires `k_q -> m1_q -> m2_q -> m3_q -> v_q` in one forward pass. V11 adds `reset_trace_tokens=(0,)`: at every statement delimiter the per-head eligibility key `prev_k` is zeroed, so each fact triple begins with a clean entity trace. The boolean `reset_mask` is threaded through both `tricore_fused_scan` and `forward_step`; a unit test checks full-vs-streaming parity under the reset path at `atol=1e-4`.
+2. **Track 5 — three-seed significance.** The infix-`EQ` two-hop dereference is repeated over seeds `42/100/2026` and reported with Welch's unequal-variance two-sample t-test (implemented with the regularized incomplete Beta function; no SciPy dependency).
+3. **Track 4B Extended — real CUDA profiling to 131,072 tokens.** Measured `torch.cuda.memory_allocated()` deltas and cached-decode latency for both models, not formula estimates.
+4. **Six-panel master figure.** `results/tricore_v11_masterpiece.png` is a 2x3 conference-style summary of depth scaling, Track 5, Track 4A, memory, latency, and code modeling.
+
+**Track 6 protocol (single seed 42, 500 steps, batch 64, CUDA).** Four chains and four queries; sequence length 68; four shuffled fact tiers of `[key, value, 0]` triples; 12 distractor tokens; 4x OOD gap uses 48 distractors (sequence length 104). Chance is **25.0%**.
+
+| Track 6 variant | Parameters | In-domain | 4x-OOD | Query router `[h1,h2,h3,h4]` | Train time |
+| :--- | ---: | ---: | ---: | :--- | ---: |
+| **TriCore Full (1-layer, `max_loops=3`)** | 236,436 | **100.00%** | **100.00%** | 0.005 / 0.004 / 0.003 / **0.988** | 214.2 s |
+| TriCore (1-layer, `max_loops=2`, 3-hop limit) | 232,211 | 24.95% | 24.76% | 0.002 / **0.997** / 0.001 / 0.000 | 184.0 s |
+| TriCore (1-layer, `max_loops=1`, 2-hop limit) | 227,986 | 25.73% | 26.27% | 0.019 / **0.981** / 0.000 / 0.000 | 148.8 s |
+| Vanilla Transformer (2-layer, `d_model=128`, 4 heads) | 306,176 | 24.41% | 25.78% | n/a | 4.0 s |
+
+**Interpretation.** Only the `max_loops=3` model crosses four edges in one forward pass: it reaches **100.00% in-domain and 100.00% at the 4x gap**, with the router placing **98.8%** of its query-position mass on hop 4. The `max_loops=2` and `max_loops=1` models collapse onto their last available slot (0.997 on slot 2, 0.981 on slot 1) but remain at chance on the task, which is the expected depth-limit signature. The Transformer is also at chance at this budget. This is a **single-seed controlled comparison**, not a significance test.
+
+**Track 5 protocol (seeds 42/100/2026, 350 steps, batch 64, CUDA).** Declaration `[LET, alias_i, EQ, var_i, SEMI]`, assignment `[SET, var_i, EQ, lit_i, SEMI]`, adversarial `[NOP, var_i, EQ, SEMI, SEMI]`, query `[RET, alias_q, EQ, SEMI, SEMI]`; the two-hop target is read at `EQ`. The target is one of 16 literals, with 25.0% four-way chance after the four SET literals are identified.
+
+| Architecture variant | Parameters | Val loss (mean ± std) | Infix `EQ` 2-hop acc (mean ± std) | Eligibility gate at `EQ` / entity | Mean train time |
+| :--- | ---: | :---: | :---: | :---: | ---: |
+| **TriCore V11 Full (eligibility trace)** | 60,819 | **0.00218 ± 0.00022** | **100.00 ± 0.00%** | 0.0032 / 0.9054 | 156.3 s |
+| TriCore V11 Fair No-Engine-I (unmodulated gates) | 60,819 | 1.4682 ± 0.0186 | 24.80 ± 1.12% | 1.0000 / 1.0000 | 129.0 s |
+| Vanilla Transformer (2-layer) | 83,456 | 1.4397 ± 0.0075 | 25.01 ± 0.63% | n/a / n/a | 14.8 s |
+
+**Welch tests (two-tailed, Welch-Satterthwaite df).** Full vs Fair on accuracy: `t=116.649`, `df=2.000`, **`p=7.35e-05`**. Full vs Transformer on accuracy: `t=206.869`, `df=2.000`, **`p=2.34e-05`**. Full vs Fair on validation loss: **`p=5.34e-05`**; Full vs Transformer on loss: **`p=8.81e-06`**. With only three seeds these are exact arithmetic on three observations per arm, not a population-level claim; they assume approximate normality and equal-sized groups.
+
+**Track 4B Extended protocol (single machine, batch 1, FP32).** The Transformer baseline is a real cached 2-layer decode: K/V tensors are allocated, written, and attended over the full causal cache at every length. `Alloc` is the measured `torch.cuda.memory_allocated()` delta after `empty_cache()`. Latency is 8 warm-up + 32 timed steps below 65K, and 4 + 16 steps at 65K/128K.
+
+| Length | TriCore state | Transformer K+V cache | Reduction | TriCore ms/token | Transformer ms/token |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 | 17,408 B | 262,144 B | 15.1x | 2.971 | 1.415 |
+| 512 | 17,408 B | 1,048,576 B | 60.2x | 2.571 | 1.387 |
+| 2,048 | 17,408 B | 4,194,304 B | 240.9x | 2.866 | 1.549 |
+| 8,192 | 17,408 B | 16,777,216 B | 963.8x | 2.922 | 3.865 |
+| 16,384 | 17,408 B | 33,554,432 B | 1,927.5x | 3.408 | 5.421 |
+| 32,768 | 17,408 B | 67,108,864 B | 3,855.1x | 2.767 | 9.735 |
+| 65,536 | 17,408 B | 134,217,728 B | 7,710.1x | 2.719 | 18.275 |
+| **131,072** | **17,408 B** | **268,435,456 B (256.00 MiB)** | **15,420.2x** | **2.737** | **35.548** |
+
+**Interpretation.** The TriCore state is **17,408 bytes = 17.00 KiB per sample** at every length. At 128K the Transformer cache is **256.00 MiB**, a **15,420.2x** reduction in measured tensor bytes. TriCore latency stays in a narrow **2.57-3.41 ms/token** band while the Transformer grows from **1.39 to 35.55 ms/token**; the first measured crossover is at `L=8,192`, and at `L=131,072` TriCore is **12.99x** faster per token. This is a measured B=1 memory/latency result on one RTX 3060, not serving throughput.
+
+**Scope.** Track 5 is a three-seed Welch check. Track 6 and Track 4B are single-seed/single-machine controlled comparisons. The Track 6 TriCore variants receive a constant token-role prior (`separator_token=0`, `syntax_tokens=(0,)`, `reset_trace_tokens=(0,)`); this is an explicit input mask, not a learned embedding, and it is applied identically to all three depth budgets. The 100% Track 6 score is on a closed synthetic pointer-chain task and does not establish general reasoning.
 
 ## V10 (v1.3.0) — Synaptic Eligibility Trace + 100% Fair Engine I Ablation
 
@@ -51,9 +98,9 @@ variance check, not a significance test.
 [![TorchScript](https://img.shields.io/badge/TorchScript-JIT%20fused-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/docs/stable/jit.html)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-sanity%20%2B%20V7%20streaming-brightgreen)](#8-verification)
-[![V9](https://img.shields.io/badge/V9-zero--F__seq%20%2B%2032K%20CUDA-blue)](#59-track-4a-v9-4-chain-five-way-3-seed-verification)
+[![V11](https://img.shields.io/badge/V11-4--hop%20%2B%20128K%20CUDA-blue)](#v11-v140--four-hop-chained-recall-three-seed-welch-tests-and-128k-cuda-profiling)
 
-> **Status:** experimental research reference; **V10 Track 5** adds the synaptic eligibility trace and a 100% fair Engine I ablation (Full 100.00%). This is not a production language model. V9 keeps every V6/V7 equation and weight name and preserves the V6/V7 records. It fuses Engine III into the JIT scan so **training never materializes `F_seq`**, adds a **4-chain, five-way, 3-seed mean ± std** verification (`42/100/2026`), and extends **real CUDA decode-state/KV-cache allocation and latency profiling** to `L=32,768`. The V6/V7 tables remain single-seed; only the V9 Track 4A is multi-seed. Read [Limitations](#9-limitations) before generalizing.
+> **Status:** experimental research reference; **V11** adds four-hop single-forward chaining, three-seed Welch tests, a six-panel master figure, and real CUDA profiling to `L=131,072`. The V10 synaptic eligibility trace remains the operator core, the V9 zero-`F_seq` training path remains intact, and all V6/V7/V8/V9/V10 records are preserved. Read [Limitations](#9-limitations) before generalizing.
 
 > **TL;DR (Track 1, 2-Hop MQAR).** Full TriCore reaches **100.00% in-domain recall** and **100.00% recall under a 4x longer adversarial distractor gap** with a **17.00 KiB O(1) state**. Removing Engine I gives **5.55% / 4.14%**; removing Engine II gives **5.78% / 3.98%**; removing Engine III gives **16.48% / 17.50%**. A 2-layer Transformer reaches **16.72% / 14.92%**, which is chance at this budget. The V6 Full run takes **80.0 s** for 500 steps versus **136.0 s** for V4 (**1.70x** faster) and **125.3 s** for V5 (**1.57x** faster), excluding a 0.4 s warm-up. In the 4-chain V9 3-seed check, Full reaches **100.00 ± 0.00%** at the 4x gap versus **22.24 ± 3.96%** for the Transformer, **23.54 ± 2.73%** without Engine III, and **5.31 ± 0.95%** without Engine II; measured decode state is **17,408 B** at every length versus a 64.00 MiB KV cache at `L=32,768` (**3,855.1x**).
 
@@ -73,7 +120,7 @@ variance check, not a significance test.
 
 - [1. The problem](#1-the-problem)
 - [2. Architecture](#2-architecture)
-- [3. What changed in V7](#3-what-changed-in-v7)
+- [3. What changed in V7-V11](#3-what-changed-in-v7-v11)
 - [4. Quick start](#4-quick-start)
 - [5. Benchmark](#5-benchmark)
 - [6. Repository layout](#6-repository-layout)
@@ -248,7 +295,11 @@ This is **not** a custom CUDA kernel and it is **not** a parallel prefix scan. T
 
 ---
 
-## 3. What changed in V7, V8, and V9
+## 3. What changed in V7-V11
+
+V11 is additive to V10. It introduces the optional `reset_trace_tokens` delimiter prior (no new parameters), Track 6 four-hop single-forward chaining, a three-seed Track 5 with exact Welch tests, real CUDA profiling to `L=131,072`, and a 2x3 master figure. The V10/V9 equations and all parameter names are preserved.
+
+V10 is additive to V9. It adds the per-head synaptic eligibility trace `prev_k`, the trace-conditioned read query, the two-layer token-role gate networks, and the 100% fair Engine I ablation. Parameter names from V6-V9 are preserved.
 
 V9 is strictly additive to V8 at the API level and removes a training-time allocation: Engine III now runs inside `tricore_fused_scan`, so the scan returns `(h_seq, mem_seq, surprise_trace)` instead of `(h_seq, r1_seq, F_seq, surprise_trace)`. The V6/V7 report rows and all parameter names are preserved. V9 also upgrades Track 4A to a 4-chain, five-way, 3-seed ablation and extends real CUDA profiling to `L=32,768`. The V9 runner is `run_v9_verification.py`; the old name `run_v8_verification.py` remains as a compatibility alias.
 
@@ -297,6 +348,12 @@ python run_experiment.py
 
 # Quick smoke run
 python run_experiment.py --steps 2 --code-steps 2
+
+# V11 flagship (Track 5 three-seed Welch + Track 6 four-hop + 128K CUDA)
+python run_v11_flagship.py
+
+# Quick V11 smoke (writes only the requested metrics file; skips plotting)
+python run_v11_flagship.py --steps5 5 --steps6 20 --eval-batches6 1 --max-length 512 --skip-plot --metrics _smoke_v11.json
 
 # V7 streaming + Track 3 only (does not rerun V6 Track 1/2)
 python run_v7_benchmark.py
@@ -518,17 +575,20 @@ tricore-arch/
 │   ├── test_v5.py           # JIT-vs-Python equivalence + code-task backward
 │   └── test_v7_streaming.py # streaming equivalence, 17 KiB state, Track 3
 ├── results/
-│   ├── BENCHMARK_REPORT.md  # V10 Track 5 + V6/V7 tables + V9 Track 4 appendix
+│   ├── BENCHMARK_REPORT.md  # V11 Track 6/5/4B + V6/V7/V9/V10 tables
 │   ├── V9_METRICS.json      # historical machine-readable V9 metrics
 │   ├── V10_METRICS.json     # machine-readable V10 Track 5 metrics
-│   └── tricore_vs_transformer.png
+│   ├── V11_METRICS.json     # V11 Track 5/6/4B metrics and Welch tests
+│   ├── tricore_vs_transformer.png
+│   └── tricore_v11_masterpiece.png
 ├── run_experiment.py        # V6 dual-track training, ablation, cache, report, plot
 ├── run_v7_benchmark.py      # V7 streaming + Track 3; preserves V6 report tables
 ├── run_v9_verification.py   # V9 five-way 3-seed Track 4A + 32K CUDA Track 4B
+├── run_v11_flagship.py      # V11 Track 5/6/4B + six-panel figure
 ├── run_v8_verification.py   # compatibility alias -> run_v9_verification
 ├── demo_showcase.py         # one-command streaming demo (no checkpoint)
 ├── requirements.txt         # torch, numpy, matplotlib
-├── pyproject.toml           # installable tricore-arch 1.3.0, MIT
+├── pyproject.toml           # installable tricore-arch 1.4.0, MIT
 ├── LICENSE                  # MIT
 ├── .gitignore               # Python/cache/venv; keeps report and PNGs
 ├── SPEC_V2.md               # V9 architecture + contracts
@@ -537,7 +597,7 @@ tricore-arch/
 
 ### 6.1 Installable package
 
-`pyproject.toml` declares `tricore-arch==1.3.0`, Python `>=3.10`, and the runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`. The package name remains `tricore-arch`; the import package is `tricore`.
+`pyproject.toml` declares `tricore-arch==1.4.0`, Python `>=3.10`, and the runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`. The package name remains `tricore-arch`; the import package is `tricore`.
 
 ```bash
 python -m pip install -e .
@@ -546,7 +606,7 @@ python -c "import tricore; print(tricore.__file__)"
 
 ### 6.2 Generated artifacts
 
-`results/BENCHMARK_REPORT.md` is the machine-generated source of truth for the latest numbers; this README and `SPEC_V2.md` summarize it. The V6 plot is a 2x2 panel; the V7 run appends its streaming and Track 3 sections without rerunning V6, and `run_v9_verification.py` replaces only its own V9 appendix. Do not hand-edit the generated report and then claim it came from a run; rerun the scripts.
+`results/BENCHMARK_REPORT.md` is the machine-generated source of truth for the latest numbers; this README and `SPEC_V2.md` summarize it. `run_v11_flagship.py` writes `results/V11_METRICS.json`, both six-panel PNGs, and the V11 top section. Do not hand-edit the generated report and then claim it came from a run; rerun the scripts.
 
 ---
 
@@ -593,7 +653,13 @@ python -c "import tricore; print(tricore.__file__)"
 
 ### 7.6 What is not controlled
 
-V9 Track 4A is a three-seed variance check, not a confidence interval or significance test; the full-size V6/V7 tracks remain single-seed. There is no hyperparameter search for the Transformer and no FLOP matching. Track 1/2 have no real held-out corpus. Track 3B has a real-source held-out suffix, but the corpus is only this small repository and is not a human-code benchmark. The V7 streaming latency is one machine's per-token loop, not a production serving benchmark. Treat the numbers as existence demonstrations and pipeline checks.
+V9 Track 4A is a three-seed variance check. V11 Track 5 adds exact two-tailed Welch tests but still has only three seeds per arm, so it is not a population-level inference. V11 Track 6 and Track 4B are single-seed/single-machine controlled comparisons. There is no hyperparameter search for the Transformer and no FLOP matching. Track 1/2 have no real held-out corpus. Track 3B has a real-source held-out suffix, but the corpus is only this small repository and is not a human-code benchmark. The V7 and V11 latency numbers are one machine's per-token loop, not a production serving benchmark. Treat the numbers as existence demonstrations and pipeline checks.
+
+### 7.7 V11 Track 6 / Track 5 / Track 4B
+
+- **Track 6:** 4 chains, 4 queries, 4 fact tiers, 12 distractors; sequence length 68; 4x OOD gap 48 distractors; 500 steps, batch 64, seed 42; `d_model=128`, `d_fast=32`; depth budgets `max_loops=3/2/1`; fixed eval seeds 6101/6102, 8 batches of 64.
+- **Track 5:** 350 steps, batch 64, seeds 42/100/2026; 4 variables, 4 queries, 4 NOPs; identical architecture variants and evaluation batches as V10; exact two-tailed Welch t-tests on accuracy and validation loss.
+- **Track 4B:** real CUDA allocation and cached decode at `L=128, 512, 2,048, 8,192, 16,384, 32,768, 65,536, 131,072`; B=1, FP32; 8 + 32 timed steps below 65K, 4 + 16 above; RTX 3060.
 
 ---
 
@@ -622,13 +688,14 @@ python tests/test_v7_streaming.py
 
 ### 8.2 V7 streaming and Track 3 tests
 
-`tests/test_v7_streaming.py` checks three properties:
+`tests/test_v7_streaming.py` checks four properties:
 
 1. For a one-layer Full model in `eval()` mode, stacking `forward_step` logits over `t=0..L-1` matches `forward(idx)` under `torch.allclose(atol=1e-5)`; surprise traces are checked as well.
 2. The total bytes in `states` are exactly `batch_size * 17,408` at both `t=16` and `t=512`, with no growth from `F_seq`.
 3. The 3-hop generator, real Python corpus loader, dense backward pass, and gradient finiteness are exercised.
+4. The V11 4-hop generator is checked for shape `(4, 68)`, 16 valid targets, finite gradients, and full-vs-`forward_step` parity with the `reset_trace_tokens=(0,)` path (`atol=1e-4`).
 
-The suite currently reports 6 passing tests: the original sanity test, the two V5 JIT/bytecode tests, and the three V7 tests.
+The suite currently reports 9 passing tests: the sanity test, four V5 JIT/bytecode/eligibility tests, and four V7/V11 streaming and recall tests.
 
 ### 8.3 Full run
 
@@ -636,13 +703,16 @@ The reference run completed on CUDA and regenerated:
 
 - `results/BENCHMARK_REPORT.md`
 - `results/tricore_vs_transformer.png`
+- `results/tricore_v11_masterpiece.png`
+- `results/V11_METRICS.json`
 
-The report contains the JIT timing, the five-way Track 1 table, the Track 2 table, the cache table, and the appended V7 streaming/Track 3 sections. If the code and this README disagree, `results/BENCHMARK_REPORT.md` and the code win.
+The report contains the V11 Track 6 and three-seed Track 5 sections, the extended 128K Track 4B table, and the preserved V10/V9/V7/V6 records. If the code and this README disagree, `results/BENCHMARK_REPORT.md` and the code win.
 
 ### 8.4 Smoke run
 
 ```bash
 python run_experiment.py --steps 2 --code-steps 2
+python run_v11_flagship.py --steps5 5 --steps6 20 --eval-batches6 1 --max-length 512 --skip-plot --metrics _smoke_v11.json
 python run_v7_benchmark.py  # streaming + Track 3; preserves V6 tables
 ```
 
@@ -652,16 +722,16 @@ This is a pipeline check, not a result. The V6 smoke compiles the scripted scan,
 
 ## 9. Limitations
 
-- **Mixed seed coverage.** The V6/V7 Track 1/2/3 tables are still single-seed. Only V9 Track 4A is a 3-seed check, and it uses a compact `d_model=64` / 4-chain task, so its mean ± std does not retroactively put confidence intervals on the V6/V7 headline numbers. The V6 No-Engine-I result (`5.55% / 4.14%`) differs substantially from the V5 record (`91.88% / 84.14%`); the equations are the same, but the vectorized hop path changes the optimization trajectory and fixed evaluation batches are used.
+- **Mixed seed coverage.** The V6/V7 Track 1/2/3 tables are still single-seed. V9 Track 4A is a 3-seed variance check, V11 Track 5 is a 3-seed Welch check, and V11 Track 6 / Track 4B are single-seed/single-machine controlled comparisons. The V11 tests have only three observations per arm, so the p-values are exact arithmetic on a tiny sample, not population inference. The V6 No-Engine-I result (`5.55% / 4.14%`) differs substantially from the V5 record (`91.88% / 84.14%`); the equations are the same, but the vectorized hop path changes the optimization trajectory and fixed evaluation batches are used.
 - **Streaming scope.** `forward_step` is an exact one-token decoding path, and the V9 training forward no longer materializes `F_seq`; it returns the fused `mem_seq` read. The 17 KiB O(1) claim applies to persistent inference state, not training activation memory or throughput.
-- **Track 3 scope.** Track 3A is a synthetic 3-hop chain task with only four chains and four queries. Track 3B is a small held-out suffix from this repository, not a human-code benchmark; its next-byte accuracy and PPL do not establish general code understanding.
-- **Synthetic tracks.** Track 1 is a controlled associative-recall construction. Track 2 is a tiny imperative grammar with disjoint namespaces. Track 3A is a four-chain synthetic 3-hop task. None is natural language or a general reasoning benchmark.
+- **Track 3 and Track 6 scope.** Track 3A is a synthetic 3-hop chain task with only four chains and four queries. V11 Track 6 is a synthetic 4-hop pointer chain with four chains and four queries. Track 3B is a small held-out suffix from this repository, not a human-code benchmark; its next-byte accuracy and PPL do not establish general code understanding.
+- **Synthetic tracks.** Track 1 is a controlled associative-recall construction. Track 2 is a tiny imperative grammar with disjoint namespaces. Track 3A and Track 6 are four-chain synthetic 3-hop/4-hop pointer tasks. None is natural language or a general reasoning benchmark.
 - **Track 2 is a closed synthetic grammar.** V6 reaches `100.00%` dereference on a deterministic bytecode task with fixed namespaces and no held-out templates. That shows the causal two-level lookup is learnable, not that the model understands real code. The PPL gap over the Transformer (`3.17` vs `3.56`) is also single-seed.
 - **The multi-hop pass is not a parallel scan.** The state recurrence is still serial. V6 vectorizes only the fixed-hop refinement over `L`; it still launches many small CUDA kernels. The measured speedup is a runtime improvement on one machine, not a hardware-optimal kernel.
 - **Transformer baselines are not fully matched.** The Track 1 baseline is untuned and much larger (`543,744` vs `207,503`); Track 3B is parameter-matched (`218,448` vs `223,887`) but not compute-matched, and TriCore trains about 38x slower there.
 - **Training memory is no longer dominated by `F_seq`.** V9 fuses Engine III into the scripted causal scan and never allocates or stacks `F_seq: [B, L, H, d_head, d_head]`. Training still stores sequence activations (`h_seq`, `mem_seq`, and autograd buffers), so it is not activation-O(1); the removed tensor was the large `L * H * d_head^2` snapshot.
-- **Long-context decode is measured to 32,768 tokens.** V9 Track 4B measures real CUDA allocation and latency through `L=32,768`; at `L=32,768` the measured KV cache is 64.00 MiB versus 17.00 KiB, and the measured per-token latency first inverts at `L=8,192`. This is a single-machine B=1 result, not a serving benchmark.
-- **No beyond-3-hop or natural-language evidence.** Track 3A tests exactly three hops; Track 3B tests next-byte prediction on a small repository suffix. Neither establishes general reasoning or natural-language ability.
+- **Long-context decode is measured to 131,072 tokens.** V11 Track 4B measures real CUDA allocation and latency through `L=131,072`; at 128K the measured KV cache is 256.00 MiB versus 17.00 KiB, and latency first inverts at `L=8,192`. This is a single-machine B=1 result, not a serving benchmark.
+- **No natural-language evidence.** Track 3A tests exactly three hops, Track 6 tests exactly four hops, and Track 3B tests next-byte prediction on a small repository suffix. None establishes general reasoning or natural-language ability.
 - **Task-specific ablations.** Engine III was redundant on the V3 single-hop task and is necessary here; Engine I's necessity depends on the noise pattern and seed. Conclusions are conditional.
 - **No production hardening.** No checkpoint format, distributed training, mixed precision, quantization, serving API, or security review.
 
@@ -669,10 +739,10 @@ This is a pipeline check, not a result. The V6 smoke compiles the scripted scan,
 
 ## 10. Roadmap
 
-1. **Multi-seed evidence (V9 baseline).** The 4-chain, five-way, 3-seed (`42/100/2026`) Track 4A now reports mean ± std for every variant; the next step is to repeat the full V6/V7 sizes with more seeds and a significance test, not just a variance check.
-2. **More hops.** 4-6 hop chains, more bridge tokens, and variable `max_loops`; measure whether the router uses or downweights extra re-queries.
+1. **Multi-seed evidence.** V9 Track 4A reports mean ± std for every variant and V11 Track 5 adds exact three-seed Welch tests. The next step is more seeds and repetition at the full V6/V7 sizes, not just a small-sample check.
+2. **More hops.** V11 reaches four hops in one forward pass; test 5-8 hop chains, more bridge tokens, and variable `max_loops` to see whether the router uses or downweights extra re-queries.
 3. **Stronger adversarial writes.** Deletion, overwrite, repeated distractors, and higher noise density.
-4. **Long-context streaming.** V9 measures real allocation and latency to 32,768 tokens; extend the same measured protocol to 128K and compare against a production KV-cache serving stack.
+4. **Long-context streaming.** V11 measures real allocation and latency to 131,072 tokens; extend the same measured protocol to 1M and compare against a production KV-cache serving stack.
 5. **Kernel-level efficiency.** Replace the scripted state loop with a fused/chunked scan or a compiled CUDA/Triton kernel; compare against the V6 JIT plus vectorized-hop baseline.
 6. **Matched baselines.** Tune the Transformer and match non-position parameters, tokens, and compute.
 7. **Harder code task.** More variables, longer schedules, held-out program templates, and a real code corpus.
@@ -683,13 +753,13 @@ This is a pipeline check, not a result. The V6 smoke compiles the scripted scan,
 ## 11. Citation
 
 ```bibtex
-@misc{tricore2026v9,
-  title        = {TriCore V9: Zero-F_seq JIT Training, Native O(1) Streaming,
-                  and 32K Real CUDA Memory/Latency Profiling},
+@misc{tricore2026v11,
+  title        = {TriCore V11: Four-Hop Latent Chaining, Three-Seed Welch Tests,
+                  and 128K Real CUDA Memory/Latency Profiling},
   author       = {The TriCore Authors},
   year         = {2026},
   howpublished = {Open-source reference implementation},
-  note         = {Version 9; MIT license; V6/V7 single-seed records plus V9 3-seed Track 4A}
+  note         = {Version 11; MIT license; V6/V7/V9/V10 records preserved}
 }
 ```
 

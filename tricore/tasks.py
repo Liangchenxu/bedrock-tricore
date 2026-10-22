@@ -294,3 +294,100 @@ def load_real_python_corpus_batches(
             yield x, y
 
     return sample_train_batch, iter_val_batches, 128
+
+
+def generate_4hop_recall_batch(
+    batch_size: int = 64,
+    num_chains: int = 4,
+    num_queries: int = 4,
+    vocab_size: int = 96,
+    noise_len: int = 12,
+    device: str = "cpu",
+):
+    """Track 6: 4-hop deep chained recall with an adversarial distractor gap.
+
+    Layout per sample::
+
+        [k_i,  m1_i, 0] * num_chains       # shuffled hop-1 facts
+        [m1_i, m2_i, 0] * num_chains       # shuffled hop-2 facts
+        [m2_i, m3_i, 0] * num_chains       # shuffled hop-3 facts
+        [m3_i, v_i,  0] * num_chains       # shuffled hop-4 facts
+        [m1_i, 0, m2_i, 0, m3_i, 0, ...]   # noise_len distractor tokens
+        [k_q, 0] * num_queries             # query at the key position
+
+    The target at a query key position is ``v_q``, requiring the four-hop
+    chain ``k_q -> m1_q -> m2_q -> m3_q -> v_q`` in a single forward step.
+    """
+    if num_chains < 1:
+        raise ValueError("num_chains must be positive")
+    if num_queries > num_chains:
+        raise ValueError("num_queries cannot exceed num_chains")
+    if noise_len % 2 != 0:
+        raise ValueError("noise_len must be even for [m, 0] distractor pairs")
+
+    tier_size = (vocab_size - 1) // 5
+    if num_chains > tier_size:
+        raise ValueError(
+            f"num_chains={num_chains} exceeds the {tier_size}-token tier size"
+        )
+
+    key_pool = torch.arange(1, 1 + tier_size)
+    m1_pool = torch.arange(1 + tier_size, 1 + 2 * tier_size)
+    m2_pool = torch.arange(1 + 2 * tier_size, 1 + 3 * tier_size)
+    m3_pool = torch.arange(1 + 3 * tier_size, 1 + 4 * tier_size)
+    val_pool = torch.arange(1 + 4 * tier_size, 1 + 5 * tier_size)
+
+    hop_len = num_chains * 3
+    query_len = num_queries * 2
+    seq_len = hop_len * 4 + noise_len + query_len
+
+    inputs = torch.zeros((batch_size, seq_len), dtype=torch.long)
+    targets = torch.full((batch_size, seq_len), -100, dtype=torch.long)
+
+    for b in range(batch_size):
+        k_toks = key_pool[torch.randperm(tier_size)[:num_chains]]
+        m1_toks = m1_pool[torch.randperm(tier_size)[:num_chains]]
+        m2_toks = m2_pool[torch.randperm(tier_size)[:num_chains]]
+        m3_toks = m3_pool[torch.randperm(tier_size)[:num_chains]]
+        v_toks = val_pool[torch.randperm(tier_size)[:num_chains]]
+
+        for pos_idx, chain_idx in enumerate(torch.randperm(num_chains)):
+            base = pos_idx * 3
+            inputs[b, base] = k_toks[chain_idx]
+            inputs[b, base + 1] = m1_toks[chain_idx]
+
+        for pos_idx, chain_idx in enumerate(torch.randperm(num_chains)):
+            base = hop_len + pos_idx * 3
+            inputs[b, base] = m1_toks[chain_idx]
+            inputs[b, base + 1] = m2_toks[chain_idx]
+
+        for pos_idx, chain_idx in enumerate(torch.randperm(num_chains)):
+            base = 2 * hop_len + pos_idx * 3
+            inputs[b, base] = m2_toks[chain_idx]
+            inputs[b, base + 1] = m3_toks[chain_idx]
+
+        for pos_idx, chain_idx in enumerate(torch.randperm(num_chains)):
+            base = 3 * hop_len + pos_idx * 3
+            inputs[b, base] = m3_toks[chain_idx]
+            inputs[b, base + 1] = v_toks[chain_idx]
+
+        gap_start = 4 * hop_len
+        for pair_idx in range(noise_len // 2):
+            chain_idx = pair_idx % num_chains
+            rem = pair_idx % 3
+            if rem == 0:
+                bridge = m1_toks[chain_idx]
+            elif rem == 1:
+                bridge = m2_toks[chain_idx]
+            else:
+                bridge = m3_toks[chain_idx]
+            inputs[b, gap_start + pair_idx * 2] = bridge
+
+        q_offset = gap_start + noise_len
+        q_indices = torch.randperm(num_chains)[:num_queries]
+        for q_idx, chain_idx in enumerate(q_indices):
+            q_pos = q_offset + q_idx * 2
+            inputs[b, q_pos] = k_toks[chain_idx]
+            targets[b, q_pos] = v_toks[chain_idx]
+
+    return inputs.to(device), targets.to(device)

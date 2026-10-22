@@ -1,4 +1,54 @@
-# TriCore V10 Experimental Benchmark Report
+# TriCore V11 Experimental Benchmark Report
+
+## V11 (v1.4.0) — Four-Hop Chained Recall, Three-Seed Welch Tests, and 128K CUDA Profiling
+
+**Release focus.** V11 adds Track 6 (single-forward four-hop chained recall), upgrades Track 5 to three seeds with Welch t-tests, extends Track 4B to `L=131,072`, and writes a 2x3 master figure. The V10 synaptic core is unchanged apart from a delimiter reset prior described below.
+
+### Track 6 — four-hop chained recall (single seed 42)
+
+The generator lays out four shuffled fact tiers `[key, value, 0]`, a distractor gap, and four `[key_q, 0]` queries. The model must follow `k_q -> m1_q -> m2_q -> m3_q -> v_q` in one forward pass. V11 passes `reset_trace_tokens=(0,)` so the per-head eligibility key `prev_k` is zeroed at every statement delimiter; the same boolean `reset_mask` is used by the fused JIT scan and by `forward_step`. Chance is 25.0%.
+
+Protocol: 500 steps, batch 64, AdamW `lr=3e-3`, weight decay `0.01`, cosine decay, clip `1.0`, seed 42; 4 chains, 4 queries, 12 distractors (sequence length 68), 4x OOD 48 distractors (sequence length 104), 8 evaluation batches of 64.
+
+| Variant | Params | In-domain | 4x OOD | Query router `[h1,h2,h3,h4]` | Train time |
+| :--- | ---: | ---: | ---: | :--- | ---: |
+| **TriCore Full (1-layer, `max_loops=3`)** | 236,436 | **100.00%** | **100.00%** | 0.005 / 0.004 / 0.003 / **0.988** | 214.2 s |
+| TriCore (1-layer, `max_loops=2`, 3-hop limit) | 232,211 | 24.95% | 24.76% | 0.002 / **0.997** / 0.001 / 0.000 | 184.0 s |
+| TriCore (1-layer, `max_loops=1`, 2-hop limit) | 227,986 | 25.73% | 26.27% | 0.019 / **0.981** / 0.000 / 0.000 | 148.8 s |
+| Vanilla Transformer (2-layer, 4 heads) | 306,176 | 24.41% | 25.78% | n/a | 4.0 s |
+
+Only Full solves the 4-hop task. The shallower budgets route almost all query mass to their final available slot but stay at chance, and the Transformer is also at chance at this budget. The 2-hop shallow reference (`max_loops=0`) reaches 22.89% in-domain and 20.47% at the gap. Track 6 is a **single-seed controlled comparison**, not a significance test.
+
+### Track 5 — three-seed infix EQ dereference and Welch tests
+
+Protocol unchanged from V10 except that every arm is repeated for seeds `42/100/2026`: 350 steps, batch 64, CUDA, 4 variables, 4 queries, 4 adversarial NOPs, 25.0% four-way chance. Welch's unequal-variance t-test is implemented from the regularized incomplete Beta function without SciPy.
+
+| Variant | Params | Val loss (mean ± std) | Accuracy (mean ± std) | Gate `EQ` / entity | Mean train time |
+| :--- | ---: | :---: | :---: | :---: | ---: |
+| **TriCore V11 Full** | 60,819 | **0.00218 ± 0.00022** | **100.00 ± 0.00%** | 0.0032 / 0.9054 | 156.3 s |
+| TriCore V11 Fair No-Engine-I | 60,819 | 1.4682 ± 0.0186 | 24.80 ± 1.12% | 1.0000 / 1.0000 | 129.0 s |
+| Vanilla Transformer (2-layer) | 83,456 | 1.4397 ± 0.0075 | 25.01 ± 0.63% | n/a / n/a | 14.8 s |
+
+Exact two-tailed Welch results: Full vs Fair accuracy `t=116.649`, `df=2.000`, **`p=7.35e-05`**; Full vs Transformer accuracy `t=206.869`, `df=2.000`, **`p=2.34e-05`**; Full vs Fair loss **`p=5.34e-05`**; Full vs Transformer loss **`p=8.81e-06`**. With three seeds per arm this is arithmetic on a very small sample, not a population claim.
+
+### Track 4B Extended — measured CUDA state and cached decode to 128K
+
+Protocol: batch 1, FP32, real `torch.cuda.memory_allocated()` deltas after `empty_cache()`, 8 warm-up + 32 timed steps below 65K and 4 + 16 at 65K/128K. The baseline is a real two-layer cached decode that writes K/V and attends over the causal cache; no formula estimate is used.
+
+| Length | TriCore state | Transformer K+V cache | Reduction | TriCore ms/token | Transformer ms/token |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 | 17,408 B | 262,144 B | 15.1x | 2.971 | 1.415 |
+| 512 | 17,408 B | 1,048,576 B | 60.2x | 2.571 | 1.387 |
+| 2,048 | 17,408 B | 4,194,304 B | 240.9x | 2.866 | 1.549 |
+| 8,192 | 17,408 B | 16,777,216 B | 963.8x | 2.922 | 3.865 |
+| 16,384 | 17,408 B | 33,554,432 B | 1,927.5x | 3.408 | 5.421 |
+| 32,768 | 17,408 B | 67,108,864 B | 3,855.1x | 2.767 | 9.735 |
+| 65,536 | 17,408 B | 134,217,728 B | 7,710.1x | 2.719 | 18.275 |
+| **131,072** | **17,408 B** | **268,435,456 B (256.00 MiB)** | **15,420.2x** | **2.737** | **35.548** |
+
+TriCore state is constant at 17.00 KiB; the 128K cache is 256.00 MiB (15,420.2x tensor-byte reduction). TriCore latency stays between 2.57 and 3.41 ms/token, while the cached Transformer grows from 1.39 to 35.55 ms/token; the measured crossover is at `L=8,192`, and at 128K TriCore is 12.99x faster per token. Single machine (RTX 3060), batch 1; not a serving-throughput result.
+
+**Figure.** `plot_masterpiece` writes the same 2x3 summary to `results/tricore_vs_transformer.png` and `results/tricore_v11_masterpiece.png`: (a) depth scaling, (b) Track 5 with Welch p-values and the eligibility-gate inset, (c) Track 4A five-way ablation, (d) memory to 128K, (e) latency to 128K, (f) code-modeling results.
 
 ## V10 (v1.3.0) — Synaptic Eligibility Trace + 100% Fair Engine I Ablation
 
@@ -60,7 +110,11 @@ variance check, not a significance test.
 
 - **Track 4A:** 4-chain 2-Hop MQAR, full five-way ablation; 350 steps, batch 64, lr 3e-3; seeds 42/100/2026; `d_model=64`, `d_fast=16`, 4 queries, train `noise_len=8` and 4x OOD `noise_len=32`; Mean ± Std (%).
 
-- **Track 4B:** Real CUDA decode-state/KV-cache allocation and latency at `L=128/512/2,048/8,192/16,384/32,768`; measured tensor bytes, allocator delta, and ms/token.
+- **Track 4B:** Real CUDA decode-state/KV-cache allocation and latency at `L=128/512/2,048/8,192/16,384/32,768/65,536/131,072`; measured tensor bytes, allocator delta, and ms/token.
+
+- **Track 5 (V11):** Infix `EQ` two-hop dereference over seeds 42/100/2026; 350 steps, batch 64; exact two-tailed Welch tests on accuracy and validation loss.
+
+- **Track 6 (V11):** Single-forward 4-hop pointer chain; 500 steps, batch 64, seed 42; 4 chains, 4 queries, 12 distractors; 4x OOD 48 distractors; `max_loops=3/2/1` plus a 2-layer Transformer; delimiter reset prior for TriCore.
 
 - **V9 Demo:** `python demo_showcase.py` streams a three-hop chain through `forward_step` with a live surprise-gate and 17.00 KiB memory dashboard.
 
