@@ -1,0 +1,35 @@
+{
+  "version": "1.3.0",
+  "track": 5,
+  "steps": 350,
+  "batch_size": 64,
+  "seed": 42,
+  "device": "cuda",
+  "chance_pct": 25.0,
+  "results": {
+    "TriCore V10 Full (With Eligibility Trace)": {
+      "parameters": 60819,
+      "val_loss": 0.002088210405781865,
+      "accuracy_pct": 100.0,
+      "mean_elig_gate_eq": 0.003636415582150221,
+      "mean_elig_gate_entity": 0.9010552167892456,
+      "train_time_s": 166.78839540481567
+    },
+    "TriCore V10 Fair No-Engine-I (Unmodulated Gate)": {
+      "parameters": 60819,
+      "val_loss": 1.4884342312812806,
+      "accuracy_pct": 24.1796875,
+      "mean_elig_gate_eq": 1.0,
+      "mean_elig_gate_entity": 1.0,
+      "train_time_s": 137.56103706359863
+    },
+    "Vanilla Transformer (2-Layer)": {
+      "parameters": 83456,
+      "val_loss": 1.4349063515663147,
+      "accuracy_pct": 25.46875,
+      "mean_elig_gate_eq": NaN,
+      "mean_elig_gate_entity": NaN,
+      "train_time_s": 15.391605854034424
+    }
+  }
+}

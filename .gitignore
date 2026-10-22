@@ -32,3 +32,4 @@ results/*
 !results/BENCHMARK_REPORT.md
 !results/*.png
 !results/V9_METRICS.json
+!results/V10_METRICS.json

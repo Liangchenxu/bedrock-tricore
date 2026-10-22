@@ -118,7 +118,7 @@ class TriCoreBlock(nn.Module):
             nn.Linear(d_model // 2, n_heads),
         )
         for gate_proj in (self.write_gate_proj, self.elig_gate_proj):
-            nn.init.zeros_(gate_proj[-1].weight)
+            nn.init.normal_(gate_proj[-1].weight, mean=0.0, std=0.02)
             nn.init.constant_(gate_proj[-1].bias, 2.0)
         self.base_decay_logit = nn.Parameter(torch.linspace(1.0, 3.0, d_model))
 
@@ -182,11 +182,14 @@ class TriCoreBlock(nn.Module):
         w_gate_t = self.write_gate_proj(u_t).view(B, H, 1, 1)
         e_gate_t = self.elig_gate_proj(u_t).view(B, H, 1, 1)
         if separator_mask is not None:
-            gate_mask = (
-                separator_mask.to(w_gate_t.dtype).view(B, 1, 1, 1) * 8.0
-            )
-            w_gate_t = w_gate_t - gate_mask
-            e_gate_t = e_gate_t - gate_mask
+            if isinstance(separator_mask, tuple):
+                elig_sep_mask, write_sep_mask = separator_mask
+                w_gate_t = w_gate_t - write_sep_mask.to(w_gate_t.dtype).view(B, 1, 1, 1) * 8.0
+                e_gate_t = e_gate_t - elig_sep_mask.to(e_gate_t.dtype).view(B, 1, 1, 1) * 8.0
+            else:
+                gate_mask = separator_mask.to(w_gate_t.dtype).view(B, 1, 1, 1) * 8.0
+                w_gate_t = w_gate_t - gate_mask
+                e_gate_t = e_gate_t - gate_mask
         hop_w_t = F.softmax(self.hop_router(u_t), dim=-1)
 
         addr_t = F.normalize(self.proj_addr(u_t).view(B, H, Dh), p=2.0, dim=-1)
@@ -287,12 +290,14 @@ class TriCoreBlock(nn.Module):
         w_gate_logits = self.write_gate_proj(u).view(B, L, H, 1, 1)
         elig_gate_logits = self.elig_gate_proj(u).view(B, L, H, 1, 1)
         if separator_mask is not None:
-            gate_mask = (
-                separator_mask.to(w_gate_logits.dtype).view(B, L, 1, 1, 1)
-                * 8.0
-            )
-            w_gate_logits = w_gate_logits - gate_mask
-            elig_gate_logits = elig_gate_logits - gate_mask
+            if isinstance(separator_mask, tuple):
+                elig_sep_mask, write_sep_mask = separator_mask
+                w_gate_logits = w_gate_logits - write_sep_mask.to(w_gate_logits.dtype).view(B, L, 1, 1, 1) * 8.0
+                elig_gate_logits = elig_gate_logits - elig_sep_mask.to(elig_gate_logits.dtype).view(B, L, 1, 1, 1) * 8.0
+            else:
+                gate_mask = separator_mask.to(w_gate_logits.dtype).view(B, L, 1, 1, 1) * 8.0
+                w_gate_logits = w_gate_logits - gate_mask
+                elig_gate_logits = elig_gate_logits - gate_mask
         hop_weights = F.softmax(self.hop_router(u), dim=-1)
 
         # Fair projections: K and V are identical under every ablation flag.
@@ -353,15 +358,24 @@ class TriCoreLM(nn.Module):
         enable_surprise_gate: bool = True,
         enable_fast_weight: bool = True,
         enable_adaptive_loop: bool = True,
+        separator_token: int = None,
+        syntax_tokens: tuple = None,
     ):
         super().__init__()
         self.enable_surprise_gate = enable_surprise_gate
         self.enable_fast_weight = enable_fast_weight
         self.enable_adaptive_loop = enable_adaptive_loop
         self.embedding = nn.Embedding(vocab_size, d_model)
-        # Optional constant separator role used by the infix code task.  The
-        # mask is an architectural prior, not a learned token embedding.
-        self.separator_token = None
+        # Optional constant token roles used by the infix code task.  These are
+        # architectural priors, not learned token embeddings.
+        self.separator_token = separator_token
+        self.syntax_tokens = syntax_tokens
+        if syntax_tokens is not None:
+            for tok_id in syntax_tokens:
+                if not 0 <= tok_id < vocab_size:
+                    raise ValueError(f"syntax token {tok_id} outside vocabulary")
+        if separator_token is not None and not 0 <= separator_token < vocab_size:
+            raise ValueError(f"separator token {separator_token} outside vocabulary")
         self.layers = nn.ModuleList([
             TriCoreBlock(
                 d_model=d_model, n_heads=4, d_head=d_fast, max_loops=max_loops
@@ -370,6 +384,19 @@ class TriCoreLM(nn.Module):
         ])
         self.final_norm = nn.LayerNorm(d_model)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
+
+    def _build_separator_mask(self, idx: torch.Tensor):
+        if self.separator_token is None and self.syntax_tokens is None:
+            return None
+        if self.separator_token is not None:
+            elig_sep_mask = (idx == self.separator_token)
+        else:
+            elig_sep_mask = torch.zeros_like(idx, dtype=torch.bool)
+        write_sep_mask = elig_sep_mask.clone()
+        if self.syntax_tokens is not None:
+            for tok_id in self.syntax_tokens:
+                write_sep_mask = write_sep_mask | (idx == tok_id)
+        return (elig_sep_mask, write_sep_mask)
 
     def init_state(self, batch_size: int, device: torch.device, dtype: torch.dtype = torch.float32):
         return [layer.init_state(batch_size, device, dtype) for layer in self.layers]
@@ -380,9 +407,7 @@ class TriCoreLM(nn.Module):
             idx_t = idx_t.squeeze(1)
             squeeze_seq = True
         x_t = self.embedding(idx_t)
-        separator_mask = None
-        if self.separator_token is not None:
-            separator_mask = (idx_t == self.separator_token)
+        separator_mask = self._build_separator_mask(idx_t)
         new_states = []
         surprises = []
         for layer, st in zip(self.layers, states):
@@ -406,9 +431,7 @@ class TriCoreLM(nn.Module):
 
     def forward(self, idx: torch.Tensor):
         x = self.embedding(idx)
-        separator_mask = None
-        if self.separator_token is not None:
-            separator_mask = (idx == self.separator_token)
+        separator_mask = self._build_separator_mask(idx)
         surprises = []
         for layer in self.layers:
             x, s = layer(

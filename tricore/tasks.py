@@ -137,9 +137,9 @@ def generate_contextual_code_lm_batch(
             deref_mask[b, pos + 1] = True
             pos += 4
 
-    inputs = seq[:, :-1].to(device)
-    lm_targets = seq[:, 1:].to(device)
-    return inputs, lm_targets, deref_mask.to(device)
+    inputs = seq[:, :-1].contiguous().to(device)
+    lm_targets = seq[:, 1:].contiguous().to(device)
+    return inputs, lm_targets, deref_mask.contiguous().to(device)
 
 
 def generate_3hop_recall_batch(

@@ -1,69 +1,63 @@
-
-## V10 (v1.3.0) Track 5: Infix Code Assignment with `=` (`EQ`) & 100% Fair Engine I Ablation
-
-- **Self-Audit Fix 1 (Infix `EQ` Bridging):** Restores `[LET, alias_i, EQ, var_i, SEMI]` and `[SET, var_i, EQ, lit_i, SEMI]` with an explicit `=` (`EQ`) token between keys and values. Synaptic Eligibility Trace (`prev_k = normalize((1 - elig_gate) * prev_k + elig_gate * k_t)`) latches entity keys across low-surprise syntax connectors.
-
-- **Self-Audit Fix 2 (100% Fair No-Engine-I Ablation):** Removed all artificial decay penalties (`0.82`) and projection handicaps. `Fair No-Engine-I` shares the exact same learned `fast_decay`, `fast_lr`, and residual projections as `Full`, only fixing `write_gate = 1.0` and `elig_gate = 1.0`.
-
-
-| Architecture Variant | Parameters | Val Loss | Infix `EQ` 2-Hop Deref Acc (%) | Train Time (s) |
-| :--- | :---: | :---: | :---: | :---: |
-| **TriCore V10 Full (With Eligibility Trace)** | 60,819 | 1.7359 | **42.24%** | 103.5s |
-| **TriCore V10 Fair No-Engine-I (Unmodulated Gate)** | 60,819 | 1.6614 | **45.80%** | 93.8s |
-| **Vanilla Transformer (2-Layer)** | 206,336 | 1.6690 | **32.03%** | 14.4s |
-
----
 # TriCore V10 — Architecture Specification and Benchmark Record
 
-## TriCore V10 (v1.3.0) — Synaptic Eligibility Trace + Fair Engine I Ablation
+## V10 (v1.3.0) — Synaptic Eligibility Trace + 100% Fair Engine I Ablation
 
 **Release focus.** V10 adds a per-head synaptic eligibility trace (`prev_k`) that
-carries entity keys across the constant infix `EQ` separator. The trace is used
-both for fast-weight writes and for the trace-conditioned read query.
+carries entity keys across the constant infix `EQ` separator. The trace is used by
+the fast-weight write path and by the trace-conditioned read query
+`q_read = normalize(elig_gate * q_t + (1 - elig_gate) * prev_k)`.
 
 **Self-audit corrections.**
-1. The first V10 draft used `prev_k` only on the write path. An `EQ` query still
-   read through the constant `EQ` address, so all aliases collided at the same
-   key. The shipped read path uses `q_read = normalize(Q_t + prev_k)`, which keeps
-   the preceding entity key available at the `EQ` position.
-2. The old No-Engine-I ablation hard-coded `fast_lr=0.95` and
-   `fast_decay=0.82`. V10 removes those overrides: the fair ablation keeps the
-   same learned `fast_lr`, `fast_decay`, and Q/K/V projections as Full, and only
-   fixes the dynamic write/eligibility gates to `1.0`.
+1. The earlier draft used `prev_k` only on the write path; an `EQ` read still used the
+   constant `EQ` address, so aliases collided. The shipped read path latches the
+   preceding entity key at `EQ` and queries with it.
+2. The old No-Engine-I ablation hard-coded `fast_lr=0.95` and `fast_decay=0.82`.
+   The fair ablation keeps the same learned `fast_lr`, `fast_decay`, and Q/K/V
+   projections as Full, and fixes only the dynamic write/eligibility gates to `1.0`.
+3. The old Track 5 query accidentally wrote the answer `lit_q` into the query input.
+   The query is now `[RET, alias_q, EQ, SEMI, SEMI]`; the target is read at the `EQ`
+   position (`pos + 2`) and never appears in the query.
 
-**Track 5 — Infix code assignment across `EQ` (350 steps, batch 64, seed 42).**
-Statements are `[LET, alias_i, EQ, var_i, SEMI]`,
-`[SET, var_i, EQ, lit_i, SEMI]`, and the query
-`[RET, alias_q, EQ, lit_q, SEMI]`; accuracy is measured at the `EQ` position
-against the two-hop target `lit_q`.
+**Track 5 protocol (350 steps, batch 64, seed 42, CUDA).**
+- Declaration: `[LET, alias_i, EQ, var_i, SEMI]`
+- Assignment: `[SET, var_i, EQ, lit_i, SEMI]`
+- Adversarial distractor: `[NOP, var_i, EQ, SEMI, SEMI]`
+- Query: `[RET, alias_q, EQ, SEMI, SEMI]`; the two-hop target `lit_q` is evaluated at `EQ`.
+- `EQ` closes both the eligibility gate and the write gate; `SEMI/LET/SET/RET/NOP`
+  close only the write gate, so statement boundaries refresh `prev_k` without
+  overwriting entity memory.
+- The target is one of 16 literal candidates. Uniform 16-way chance is **6.25%**;
+  after identifying the four SET literals, the four-way chance is **25.0%**.
 
-| Model | Parameters | EQ dereference accuracy | Mean eligibility gate at EQ | Train time |
-| :--- | ---: | ---: | ---: | ---: |
-| TriCore V10 Full | 56,915 | **51.88%** | 0.478 | 120.3 s |
-| TriCore V10 Fair No-Engine-I | 56,915 | 51.17% | 1.000 (fixed) | 99.0 s |
-| Vanilla Transformer (2-layer) | 83,456 | 46.25% | n/a | 18.8 s |
+| Architecture variant | Parameters | Val loss | Infix `EQ` 2-hop deref acc (%) | Mean eligibility gate at `EQ` / entity | Train time (s) |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| **TriCore V10 Full (with eligibility trace)** | 60,819 | 0.0021 | **100.00%** | 0.0036 / 0.9011 | 166.8 |
+| **TriCore V10 Fair No-Engine-I (unmodulated gates)** | 60,819 | 1.4884 | **24.18%** | 1.0000 / 1.0000 | 137.6 |
+| **Vanilla Transformer (2-layer)** | 83,456 | 1.4349 | **25.47%** | n/a / n/a | 15.4 |
 
-Chance is 25% (4 variables). Full learns to close the eligibility gate at `EQ`
-(mean 0.478) and keeps it open elsewhere
-(0.469); Fair No-Engine-I is unmodulated and therefore
-overwrites the alias trace at every `EQ`, collapsing to chance. This is a
-single-seed variance check on one machine, not a significance test.
+**Interpretation.** Full reaches **100.00%** and closes the eligibility
+gate at `EQ` (mean 0.0036) while leaving entity positions open
+(mean 0.9011). The fair No-Engine-I ablation reaches
+**24.18%**; without a gate it overwrites the alias trace at
+every `EQ`. The attention baseline remains far below Full on this small training budget; this is a single-seed observation, not a claim about all Transformers. The run is one seed and one machine, so this is a
+variance check, not a significance test.
 
+---
 
-**Project:** `tricore-arch` 1.2.0  
+**Project:** `tricore-arch` 1.3.0  
 **Operator:** attention-free, constant-size recurrent state, causal shifted fast-weight binding, fused latent multi-hop re-query  
 **Runtime:** `@torch.jit.script tricore_fused_scan` for the O(1) state and zero-`F_seq` multi-hop training, plus native `init_state` / `forward_step` per-token decoding  
-**Status:** research reference; V6/V7 records plus a 4-chain, five-way, 3-seed V9 verification and 32K CUDA profiling  
+**Status:** research reference; V10 Track 5 + fair Engine I ablation, V6/V7 records, a 4-chain V9 verification and 32K CUDA profiling  
 **Executable source of truth:** `tricore/model.py`  
 **Benchmark source of truth:** `results/BENCHMARK_REPORT.md`
 
-> **Document provenance.** This specification describes V9. The equations, shapes, flags, state accounting, and streaming API mirror `tricore/model.py`, `tricore/tasks.py`, `run_experiment.py`, and `run_v9_verification.py`. V9 is additive to V6/V7 at the API level, preserves every parameter name, and removes the training-only `F_seq` snapshot tensor by fusing Engine III into the JIT scan. The benchmark numbers are artifacts generated on the reference machine. If this document and the code disagree, the code wins and this document must be corrected.
+> **Document provenance.** This specification describes V10; V9/V7/V6 records are retained. The equations, shapes, flags, state accounting, and streaming API mirror `tricore/model.py`, `tricore/tasks.py`, `run_experiment.py`, and `run_v9_verification.py`. V9 is additive to V6/V7 at the API level, preserves every parameter name, and removes the training-only `F_seq` snapshot tensor by fusing Engine III into the JIT scan. The benchmark numbers are artifacts generated on the reference machine. If this document and the code disagree, the code wins and this document must be corrected.
 
 ---
 
 ## 1. Scope
 
-TriCore V9 is a sequence operator with three independently ablatable mechanisms:
+TriCore V10 is a sequence operator with three independently ablatable mechanisms:
 
 1. **Engine I — Surprise-Gated State Collapse and Write Protection:** a gated recurrent vector `h_t`, plus a learned per-head write gate on the fast-weight learning rate.
 2. **Engine II — Subspace-Aligned Causal Shifted Fast Weights:** a per-head delta-rule matrix `F_t` that binds `K_{t-1}` to `V_t`, with a shared canonical address for Q/K/V.
@@ -134,7 +128,7 @@ numpy>=1.24.0
 matplotlib>=3.7.0
 ```
 
-`pyproject.toml` declares `tricore-arch==1.2.0`, Python `>=3.10`, and the same runtime dependencies. `pip install -e .` installs the `tricore` import package.
+`pyproject.toml` declares `tricore-arch==1.3.0`, Python `>=3.10`, and the same runtime dependencies. `pip install -e .` installs the `tricore` import package.
 
 ### 2.2 Public API
 
@@ -661,7 +655,7 @@ All three outputs (`h_seq`, `mem_seq`, `surprise_trace`) must satisfy `torch.all
 2. The persistent state is exactly `batch_size * 17,408` bytes at `t=16` and `t=512`.
 3. `generate_3hop_recall_batch` shapes/targets and the real Python corpus loader support a finite gradient backward pass.
 
-The complete suite currently reports 7 passing tests. `run_v7_benchmark.py` regenerates only the V7 streaming and Track 3 sections; it preserves the V6 Track 1/Track 2 tables in `results/BENCHMARK_REPORT.md`.
+The complete suite currently reports 8 passing tests. `run_v7_benchmark.py` regenerates only the V7 streaming and Track 3 sections; it preserves the V6 Track 1/Track 2 tables in `results/BENCHMARK_REPORT.md`.
 
 V9 adds no new parameter names. `run_v9_verification.py` exercises the zero-`F_seq` training path under three seeds and writes `results/V9_METRICS.json`; `demo_showcase.py` exercises `init_state` / `forward_step` end to end. Track 4A is a 4-chain, five-way, 3-seed rerun, and Track 4B is a real CUDA allocation/latency measurement through `L=32,768`, both reported in sections 7.8-7.9.
 
