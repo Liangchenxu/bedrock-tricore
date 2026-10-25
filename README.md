@@ -4,9 +4,9 @@
   <p><b>恒定状态 O(1) 无注意力序列算子：因果 Delta 规则快权重、突触资格迹与隐空间多跳循环</b></p>
 
   <p>
-    <a href="#-part-i-english-flagship-specification"><b>English Flagship Specification (Full)</b></a> •
-    <a href="#-part-ii-中文旗舰技术白皮书完整版"><b>中文旗舰技术白皮书（完整版）</b></a> •
-    <a href="#-part-iii-complete-historical-evolution-ledger-v4--v13"><b>Historical Evolution Ledger (V4 → V13)</b></a>
+    <a href="#part-i-english-flagship-specification"><b>English Flagship Specification (Full)</b></a> •
+    <a href="#part-ii-中文旗舰技术白皮书完整版"><b>中文旗舰技术白皮书（完整版）</b></a> •
+    <a href="#part-iii-complete-historical-evolution-ledger-v4--v13"><b>Historical Evolution Ledger (V4 → V13)</b></a>
   </p>
 </div>
 
