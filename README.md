@@ -1,12 +1,12 @@
 <div align="center">
-  <h1>🪨 Bedrock-TriCore (<code>bedrock-tricore</code> v1.6.0)</h1>
-  <h3><i>The Unbreakable 17.00 KiB O(1) Sequence Foundation for 1M-Token Modeling, Deep Multi-Hop Synaptic Chaining &amp; Targeted Delta-Rule Erasure</i></h3>
-  <p><b>基岩·三核架构：面向百万 Token 序列建模、单层四跳指针解引用与多轮动态状态覆写的 17.00 KiB 常数级无注意力基础架构</b></p>
+  <h1>Bedrock-TriCore (<code>bedrock-tricore</code> v1.6.0)</h1>
+  <h3><i>An Attention-Free, Constant-State O(1) Sequence Operator with Causal Delta-Rule Fast Weights and Latent Multi-Hop Chaining</i></h3>
+  <p><b>恒定状态 O(1) 无注意力序列算子：因果 Delta 规则快权重、突触资格迹与隐空间多跳循环</b></p>
 
   <p>
-    <a href="#-part-i-english-flagship-specification"><b>🌐 English Flagship Specification (Full)</b></a> •
-    <a href="#-part-ii-中文旗舰技术白皮书完整版"><b>🇨🇳 中文旗舰技术白皮书（完整版）</b></a> •
-    <a href="#-part-iii-complete-historical-evolution-ledger-v4--v13"><b>📜 Historical Evolution Ledger (V4 → V13)</b></a>
+    <a href="#-part-i-english-flagship-specification"><b>English Flagship Specification (Full)</b></a> •
+    <a href="#-part-ii-中文旗舰技术白皮书完整版"><b>中文旗舰技术白皮书（完整版）</b></a> •
+    <a href="#-part-iii-complete-historical-evolution-ledger-v4--v13"><b>Historical Evolution Ledger (V4 → V13)</b></a>
   </p>
 </div>
 
@@ -20,9 +20,9 @@
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-green"></a>
 </p>
 
-> ### “When Self-Attention crumbles under the 2.00 GiB KV-cache weight of 1,048,576 tokens, only **Bedrock-TriCore** stands unmoved at 17.00 KiB — streaming at 3.79 ms/token while resolving 4-hop pointer chains and multi-round state mutations in a single layer.”
+> **Abstract.** `bedrock-tricore` is an attention-free sequence operator maintaining a constant O(1) persistent inference state (**17,408 B / 17.00 KiB** per sample at FP32). It combines surprise-gated state collapse and synaptic eligibility traces (Engine I), causal shifted Delta-rule fast weights (Engine II), and a fused latent multi-hop equilibrium loop (Engine III).
 >
-> ### “当自注意力机制在 1,048,576 个 Token 的 2.00 GiB 显存重压下崩塌时，唯有 **Bedrock-TriCore（基岩·三核）** 屹立于 17.00 KiB 纹丝不动 —— 以 3.79 ms/token 极速流式解码，在单层物理层内穿透四跳指针链与多轮动态变量覆写。”
+> **摘要。** `bedrock-tricore` 是一种保持恒定 O(1) 持久化推理状态（FP32 下单样本恒为 **17,408 B / 17.00 KiB**）的无注意力序列算子，结合了惊奇门控与突触资格迹（Engine I）、因果移位 Delta 规则快权重（Engine II）以及融合隐空间多跳平衡循环（Engine III）。
 
 <p align="center">
   <img src="results/tricore_vs_transformer.png" alt="Bedrock-TriCore V13 six-panel panorama: mutation accuracy, static/hot retention, stale confusion, 1M-token memory, decode latency, and multi-hop depth" width="100%">
@@ -32,7 +32,7 @@
 
 ---
 
-## 🌐 Part I: English Flagship Specification
+## Part I: English Flagship Specification
 
 > **Reading contract.** Part I is the current, self-contained technical specification for `bedrock-tricore` v1.6.0. Part II is its full Chinese counterpart. Part III is an append-only archive: every V4–V13 release note, table, correction, and self-audit is preserved verbatim so that no historical claim is silently rewritten. Where an older section and this specification disagree, the newer measured result and its stated scope govern.
 
@@ -220,9 +220,9 @@ At the conventional 0.05 level the overall, hot, and stale contrasts reject the 
 Engine I supplies the second half of the mechanism. Its synaptic eligibility trace is the frozen previous key, and the trace-conditioned read is:
 
 ```math
-q_t^{\text{read}} = \operatorname{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right),
+q_t^{\text{read}} = \mathrm{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right),
 \qquad
-\text{prev\_k}_{t+1} = \operatorname{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right).
+\text{prev\_k}_{t+1} = \mathrm{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right).
 ```
 
 When the eligibility gate closes at an infix connector (`e_t ≈ 0`), the read dereferences the preceding entity and `prev_k` does not advance. The next token's value is therefore written at that entity's key, producing the shifted binding `F(alias)=var`. When the trace is wrong, the two-hop dereference has no address to follow. The V13 Fair No-Engine-I arm keeps Delta and the learned write path but disables the surprise gate; it falls to **37.89%**, confirming that erasure alone is not enough without a stable address.
@@ -398,23 +398,23 @@ Notation: `B` batch, `L` sequence length, `D` model width, `H` heads, `d_head` h
 Each token is normalized before any projection:
 
 ```math
-u_t = \operatorname{LN}(x_t), \qquad \tilde{u}_t = \operatorname{SiLU}(W_u u_t + b_u).
+u_t = \mathrm{LN}(x_t), \qquad \tilde{u}_t = \mathrm{SiLU}(W_u u_t + b_u).
 ```
 
 A shared address is projected and normalized:
 
 ```math
-a_t = \operatorname{normalize}(W_a u_t) \in \mathbb{R}^{H \times d_{\text{head}}}.
+a_t = \mathrm{normalize}(W_a u_t) \in \mathbb{R}^{H \times d_{\text{head}}}.
 ```
 
 `Q`, `K`, and `V` are residuals around that shared address, with a fixed residual scale of `0.15`:
 
 ```math
-Q_t = \operatorname{normalize}\left(a_t + 0.15\,W_q u_t\right),
+Q_t = \mathrm{normalize}\left(a_t + 0.15\,W_q u_t\right),
 ```
 
 ```math
-K_t = \operatorname{normalize}\left(a_t + 0.15\,W_k u_t\right),
+K_t = \mathrm{normalize}\left(a_t + 0.15\,W_k u_t\right),
 ```
 
 ```math
@@ -424,7 +424,7 @@ V_t = a_t + 0.15\,W_v u_t.
 The hop router is a softmax over the initial read plus `L_max` refinements:
 
 ```math
-w_t^{\text{hop}} = \operatorname{softmax}(W_r u_t) \in \mathbb{R}^{L_{\max}+1}.
+w_t^{\text{hop}} = \mathrm{softmax}(W_r u_t) \in \mathbb{R}^{L_{\max}+1}.
 ```
 
 There is no positional embedding and no attention over sequence positions. The only softmax over positions is this hop router, whose support is the fixed hop budget rather than `L`. The shared normalized address is what makes a retrieved bridge reusable as the next query: a value written under an address is read back in the same metric space.
@@ -488,7 +488,7 @@ The effective fast-weight learning rate is attenuated, never amplified:
 ```math
 \eta_{\text{eff},t} = \eta \odot \omega_t,
 \qquad
-\eta = \operatorname{sigmoid}(\text{fast\_lr\_logit}).
+\eta = \mathrm{sigmoid}(\text{fast\_lr\_logit}).
 ```
 
 This is why `enable_surprise_gate=False` is a *fair* ablation: it removes the learned write path and the surprise modulation, but it does not change parameter shapes. In that mode the implementation sets `g_t=0.5`, `s_t=0.5`, `η_eff=1.0`, `decay=1.0`, and applies no learned gate.
@@ -506,11 +506,11 @@ e_t = \sigma\left(\ell_t^{e} + s_t - 0.5\right).
 Unlike the write gate, this gate does **not** attenuate the fast-weight write. It controls which key is addressed. The trace-conditioned query and the next trace are:
 
 ```math
-q_t^{\text{read}} = \operatorname{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right),
+q_t^{\text{read}} = \mathrm{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right),
 ```
 
 ```math
-\text{prev\_k}_{t+1} = \operatorname{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right).
+\text{prev\_k}_{t+1} = \mathrm{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right).
 ```
 
 When the gate closes at an infix connector (`e_t ≈ 0`), the read dereferences the frozen preceding entity and `prev_k` does not advance. The following token's value is written at that entity key. This is the shifted binding `F(alias)=var`, and it is the direction that makes `alias -> var -> lit` work. An open-at-EQ convention would write `F(EQ)=var` and could not support the chain.
@@ -575,7 +575,7 @@ r^{(0)} = r_t^{(0)}, \qquad r_{\text{accum}} = w_{t,0}^{\text{hop}} r^{(0)}.
 For `i = 0, ..., L_max-1`:
 
 ```math
-q^{(i+1)} = \operatorname{normalize}\left(r^{(i)} + H_i r^{(i)}\right),
+q^{(i+1)} = \mathrm{normalize}\left(r^{(i)} + H_i r^{(i)}\right),
 ```
 
 ```math
@@ -595,13 +595,13 @@ r_t^{\text{out}} = r_{\text{accum}}.
 The readout fuses the collapse state and the routed memory:
 
 ```math
-z_t = h_t + W_o \operatorname{vec}\left(r_t^{\text{out}}\right),
+z_t = h_t + W_o \mathrm{vec}\left(r_t^{\text{out}}\right),
 ```
 
 ```math
-z_t \leftarrow z_t + s_t \odot \operatorname{MLP}\left(\operatorname{LN}(z_t)\right),
+z_t \leftarrow z_t + s_t \odot \mathrm{MLP}\left(\mathrm{LN}(z_t)\right),
 \qquad
-y_t = x_t + \operatorname{LN}(z_t).
+y_t = x_t + \mathrm{LN}(z_t).
 ```
 
 When `enable_adaptive_loop=False`, `r_t^out=r_t^(0)` and the refinement MLP is skipped. When `enable_fast_weight=False`, `z=h_seq` and Engine III has no memory to read.
@@ -957,7 +957,7 @@ Bedrock-TriCore is best understood as a **controlled demonstration of a design t
 
 ---
 
-## 🇨🇳 Part II: 中文旗舰技术白皮书（完整版）
+## Part II: 中文旗舰技术白皮书（完整版）
 
 > **阅读契约。** 本部分是 `bedrock-tricore` v1.6.0 当前、自洽、完整的中文技术规范，与 Part I 英文旗舰版逐章对等。Part III 是只追加、不覆盖的历史档案：V4 至 V13 的每一份发布记录、表格、修正与自我审计都原样保留，任何旧结论都不会被静默改写。若旧章节与本文冲突，以更新的实测结果及其明确声明的适用范围为准。
 
@@ -1145,9 +1145,9 @@ V13 三 seed、400 步实测：
 Engine I 提供另一半机制。其突触资格迹就是冻结的前一个键，迹条件读取为：
 
 ```math
-q_t^{\text{read}} = \operatorname{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right),
+q_t^{\text{read}} = \mathrm{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right),
 \qquad
-\text{prev\_k}_{t+1} = \operatorname{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right).
+\text{prev\_k}_{t+1} = \mathrm{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right).
 ```
 
 当中缀连接符处资格门关闭（`e_t ≈ 0`）时，读取解引用前一个实体，且 `prev_k` 不前进。于是下一个 Token 的值被写入该实体键，形成移位绑定 `F(alias)=var`。若迹的方向错误，两跳解引用就没有地址可循。V13 Fair No-Engine-I 保留 Delta 与可学习写路径，只关闭惊讶门，总体跌到 **37.89%**，说明没有稳定地址时，单靠擦除并不够。
@@ -1323,23 +1323,23 @@ Track 7 是定义本次发布的实验。协议：seeds `42/100/2026`、**400 �
 每个 Token 先归一化，再做投影：
 
 ```math
-u_t = \operatorname{LN}(x_t), \qquad \tilde{u}_t = \operatorname{SiLU}(W_u u_t + b_u).
+u_t = \mathrm{LN}(x_t), \qquad \tilde{u}_t = \mathrm{SiLU}(W_u u_t + b_u).
 ```
 
 共享地址投影并归一化：
 
 ```math
-a_t = \operatorname{normalize}(W_a u_t) \in \mathbb{R}^{H \times d_{\text{head}}}.
+a_t = \mathrm{normalize}(W_a u_t) \in \mathbb{R}^{H \times d_{\text{head}}}.
 ```
 
 `Q`、`K`、`V` 都是共享地址的残差扰动，固定残差尺度为 `0.15`：
 
 ```math
-Q_t = \operatorname{normalize}\left(a_t + 0.15\,W_q u_t\right),
+Q_t = \mathrm{normalize}\left(a_t + 0.15\,W_q u_t\right),
 ```
 
 ```math
-K_t = \operatorname{normalize}\left(a_t + 0.15\,W_k u_t\right),
+K_t = \mathrm{normalize}\left(a_t + 0.15\,W_k u_t\right),
 ```
 
 ```math
@@ -1349,7 +1349,7 @@ V_t = a_t + 0.15\,W_v u_t.
 跳路由器对“初始读取 + `L_max` 次细化”做 softmax：
 
 ```math
-w_t^{\text{hop}} = \operatorname{softmax}(W_r u_t) \in \mathbb{R}^{L_{\max}+1}.
+w_t^{\text{hop}} = \mathrm{softmax}(W_r u_t) \in \mathbb{R}^{L_{\max}+1}.
 ```
 
 这里没有位置嵌入，也没有对序列位置的注意力。唯一按位置做 softmax 的是跳路由器，其支撑集是固定跳数预算而非 `L`。共享归一化地址是“检索出的桥接值可直接作为下一次查询”的关键：写入某地址的值，会在同一度量空间中被读回。
@@ -1413,7 +1413,7 @@ h_t = \lambda \odot \left(1 - 0.5\,g_t\right) \odot h_{t-1} + g_t \odot \tilde{u
 ```math
 \eta_{\text{eff},t} = \eta \odot \omega_t,
 \qquad
-\eta = \operatorname{sigmoid}(\text{fast\_lr\_logit}).
+\eta = \mathrm{sigmoid}(\text{fast\_lr\_logit}).
 ```
 
 这就是 `enable_surprise_gate=False` 是**公平**消融的原因：它移除可学习写路径与惊讶调制，但不改变参数形状。该模式下实现取 `g_t=0.5`、`s_t=0.5`、`η_eff=1.0`、`decay=1.0`，且不应用学习写门。
@@ -1431,11 +1431,11 @@ e_t = \sigma\left(\ell_t^{e} + s_t - 0.5\right).
 与写门不同，资格门**不**衰减快速权重写入，它控制“寻址哪个键”。迹条件查询与下一迹为：
 
 ```math
-q_t^{\text{read}} = \operatorname{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right),
+q_t^{\text{read}} = \mathrm{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right),
 ```
 
 ```math
-\text{prev\_k}_{t+1} = \operatorname{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right).
+\text{prev\_k}_{t+1} = \mathrm{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right).
 ```
 
 当中缀连接符处门关闭（`e_t ≈ 0`），读取解引用冻结的前一个实体，`prev_k` 不前进；下一个 Token 的值就写入该实体键。这就是移位绑定 `F(alias)=var`，也是 `alias -> var -> lit` 能成立的方向。若采用“在 EQ 处打开”的约定，就会写 `F(EQ)=var`，无法支持该链。
@@ -1500,7 +1500,7 @@ r^{(0)} = r_t^{(0)}, \qquad r_{\text{accum}} = w_{t,0}^{\text{hop}} r^{(0)}.
 对 `i = 0, ..., L_max-1`：
 
 ```math
-q^{(i+1)} = \operatorname{normalize}\left(r^{(i)} + H_i r^{(i)}\right),
+q^{(i+1)} = \mathrm{normalize}\left(r^{(i)} + H_i r^{(i)}\right),
 ```
 
 ```math
@@ -1520,13 +1520,13 @@ r_t^{\text{out}} = r_{\text{accum}}.
 读出融合坍缩状态与路由记忆：
 
 ```math
-z_t = h_t + W_o \operatorname{vec}\left(r_t^{\text{out}}\right),
+z_t = h_t + W_o \mathrm{vec}\left(r_t^{\text{out}}\right),
 ```
 
 ```math
-z_t \leftarrow z_t + s_t \odot \operatorname{MLP}\left(\operatorname{LN}(z_t)\right),
+z_t \leftarrow z_t + s_t \odot \mathrm{MLP}\left(\mathrm{LN}(z_t)\right),
 \qquad
-y_t = x_t + \operatorname{LN}(z_t).
+y_t = x_t + \mathrm{LN}(z_t).
 ```
 
 当 `enable_adaptive_loop=False` 时，`r_t^out=r_t^(0)`，且跳过细化 MLP。当 `enable_fast_weight=False` 时，`z=h_seq`，Engine III 无记忆可读。
@@ -1880,7 +1880,7 @@ Bedrock-TriCore 最准确的理解是**一次受控的设计权衡演示**：用
 
 ---
 
-## 📜 Part III: Complete Historical Evolution Ledger (V4 → V13)
+## Part III: Complete Historical Evolution Ledger (V4 → V13)
 
 > **Append-only archive.** Everything below this line is the complete pre-v1.6.0 README, preserved verbatim: V13, V12, V11, V10, V9, V8, V7, V6, V5, and V4 release notes, tables, corrections, and self-audits. It is reproduced without deletion so that any future reader or AI can trace every claim from V4 to V13. Where an archived statement conflicts with Part I or Part II, the newer measured result and its explicit scope govern; the old text is still kept for audit.
 
@@ -2144,21 +2144,21 @@ TriCore is a residual sequence block with three independently ablatable engines.
 ### 2.1 Causal input path
 
 ```math
-u_t = \operatorname{LN}(x_t), \qquad \tilde{u}_t = \operatorname{SiLU}(W_u u_t + b_u)
+u_t = \mathrm{LN}(x_t), \qquad \tilde{u}_t = \mathrm{SiLU}(W_u u_t + b_u)
 ```
 
 ```math
-a_t = \operatorname{normalize}(W_a u_t)
+a_t = \mathrm{normalize}(W_a u_t)
 ```
 
 ```math
-Q_t = \operatorname{normalize}(a_t + 0.15 W_q u_t), \quad
-K_t = \operatorname{normalize}(a_t + 0.15 W_k u_t), \quad
+Q_t = \mathrm{normalize}(a_t + 0.15 W_q u_t), \quad
+K_t = \mathrm{normalize}(a_t + 0.15 W_k u_t), \quad
 V_t = a_t + 0.15 W_v u_t
 ```
 
 ```math
-w_t^{\text{hop}} = \operatorname{softmax}(W_r u_t)
+w_t^{\text{hop}} = \mathrm{softmax}(W_r u_t)
 ```
 
 `Q/K/V` have shape `[B, L, H, d_head]`; the hop router has shape `[B, L, L_max+1]`. All L2 normalization is over the head dimension. The shared normalized address `a_t` keeps a retrieved bridge compatible with the next query.
@@ -2214,7 +2214,7 @@ r^{(0)} = r_t^{(0)}, \qquad r_{\text{accum}} = w_{t,0}^{\text{hop}} r^{(0)}
 For `i = 0, \ldots, L_{\max}-1`:
 
 ```math
-q^{(i+1)} = \operatorname{normalize}\left(r^{(i)} + H_i r^{(i)}\right)
+q^{(i+1)} = \mathrm{normalize}\left(r^{(i)} + H_i r^{(i)}\right)
 ```
 
 ```math
@@ -2227,12 +2227,12 @@ r_{\text{accum}} \leftarrow r_{\text{accum}} + w_{t,i+1}^{\text{hop}} r^{(i+1)}
 ### 2.5 Readout
 
 ```math
-z_t = h_t + W_o \operatorname{vec}(r_t^{\text{out}})
+z_t = h_t + W_o \mathrm{vec}(r_t^{\text{out}})
 ```
 
 ```math
-z_t \leftarrow z_t + s_t \odot \operatorname{MLP}(\operatorname{LN}(z_t)), \qquad
-y_t = x_t + \operatorname{LN}(z_t)
+z_t \leftarrow z_t + s_t \odot \mathrm{MLP}(\mathrm{LN}(z_t)), \qquad
+y_t = x_t + \mathrm{LN}(z_t)
 ```
 
 When `enable_adaptive_loop=False`, `r_t^out = r_t^(0)` and the refinement MLP is skipped. When `enable_fast_weight=False`, Engine II is skipped, `z=h_seq`, and Engine III has no memory to read. All modules are constructed regardless of flags, so all TriCore variants report the same parameter count.

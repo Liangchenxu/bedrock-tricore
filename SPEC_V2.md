@@ -340,21 +340,21 @@ and accumulates per-position outputs in lists. It never materializes a `[B, L, H
 ### 3.2 Causal input path
 
 ```math
-u_t = \operatorname{LN}(x_t), \qquad \tilde{u}_t = \operatorname{SiLU}(W_u u_t + b_u)
+u_t = \mathrm{LN}(x_t), \qquad \tilde{u}_t = \mathrm{SiLU}(W_u u_t + b_u)
 ```
 
 ```math
-a_t = \operatorname{normalize}(W_a u_t)
+a_t = \mathrm{normalize}(W_a u_t)
 ```
 
 ```math
-Q_t = \operatorname{normalize}(a_t + 0.15 W_q u_t), \quad
-K_t = \operatorname{normalize}(a_t + 0.15 W_k u_t), \quad
+Q_t = \mathrm{normalize}(a_t + 0.15 W_q u_t), \quad
+K_t = \mathrm{normalize}(a_t + 0.15 W_k u_t), \quad
 V_t = a_t + 0.15 W_v u_t
 ```
 
 ```math
-w_t^{\text{hop}} = \operatorname{softmax}(W_r u_t) \in \mathbb{R}^{L_{\max}+1}
+w_t^{\text{hop}} = \mathrm{softmax}(W_r u_t) \in \mathbb{R}^{L_{\max}+1}
 ```
 
 All L2 normalization is over the head dimension (`dim=-1`). There is no positional embedding and no attention over sequence positions.
@@ -413,7 +413,7 @@ r^{(0)} = r_t^{(0)}, \qquad r_{\text{accum}} = w_{t,0}^{\text{hop}} r^{(0)}
 For `i = 0, \ldots, L_{\max}-1`:
 
 ```math
-q^{(i+1)} = \operatorname{normalize}\left(r^{(i)} + H_i r^{(i)}\right)
+q^{(i+1)} = \mathrm{normalize}\left(r^{(i)} + H_i r^{(i)}\right)
 ```
 
 ```math
@@ -434,12 +434,12 @@ When `enable_adaptive_loop=False`, `r_t^out = r_t^(0)` and the refinement MLP is
 ### 3.6 Readout
 
 ```math
-z_t = h_t + W_o \operatorname{vec}(r_t^{\text{out}})
+z_t = h_t + W_o \mathrm{vec}(r_t^{\text{out}})
 ```
 
 ```math
-z_t \leftarrow z_t + s_t \odot \operatorname{MLP}(\operatorname{LN}(z_t)), \qquad
-y_t = x_t + \operatorname{LN}(z_t)
+z_t \leftarrow z_t + s_t \odot \mathrm{MLP}(\mathrm{LN}(z_t)), \qquad
+y_t = x_t + \mathrm{LN}(z_t)
 ```
 
 ### 3.7 Ablation semantics
@@ -539,11 +539,11 @@ infix_connector  = structural & ~delimiter & (freq_at_previous_position <= 4)
 The eligibility gate has two coupled effects:
 
 ```math
-q_t^{\text{read}} = \operatorname{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right)
+q_t^{\text{read}} = \mathrm{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right)
 ```
 
 ```math
-\text{prev\_k}_{t+1} = \operatorname{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right)
+\text{prev\_k}_{t+1} = \mathrm{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right)
 ```
 
 Thus `e_t \approx 0` at `alias EQ var` reads the alias trace and freezes `prev_k`; at the following `var` the value is written at the alias key, producing the shifted binding `F(alias)=var`. This is why the direction of the gate matters: an open-at-EQ convention would write `F(EQ)=var` and could not support `alias -> var -> lit`.
