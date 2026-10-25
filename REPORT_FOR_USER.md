@@ -1,4 +1,64 @@
-# TriCore V11 完成报告
+# TriCore V12 完成报告
+
+<!-- V12_REPORT_SECTION -->
+## V12（v1.5.0）— 零先验自主语法发现、Delta 规则动态覆写与 1,048,576-token CUDA 实测
+
+**本版重点。** V12 不移除任何 V4–V11 历史结果，新增五项交付：
+
+1. **零先验自主语法发现。** `TriCoreLM(..., autonomous_syntax=True)` 在 `separator_token=None`、`syntax_tokens=None`、`reset_trace_tokens=None` 下，仅用当前序列的 token 频率与前驱频率发现结构 token、终止分隔符和中缀连接符。不传任何 token ID，不使用可学习角色表，也不增加循环状态。
+2. **正确的结构门方向。** 中缀连接符处的资格迹门关闭后读取冻结的前一个实体 key，并阻止 `prev_k` 前进；写门在连接符和分隔符处保持关闭。这产生 `F(alias)=var` 的移位绑定，正好匹配查询 `[RET, alias, EQ, ...]`。
+3. **可切换 Delta 规则。** `enable_delta_rule=True` 使用 `F_t = decay*F_{t-1} + lr*(V_t - F_{t-1}K_{t-1})K_{t-1}^T`；`False` 在相同 decay/lr 下使用纯 Hebbian 外积。参数量与 17,408-byte 状态完全不变。
+4. **Track 7 动态变量覆写。** 变量先写入旧字面量，再覆写为新字面量，经 NOP 干扰后通过 alias 查询；目标是**新值**，四路随机基线 25.0%。这直接测试旧值擦除，而不是静态绑定。
+5. **Track 4B 扩展到 1,048,576。** 用真实 CUDA 分配量与真实缓存解码延迟测量两种模型，不使用公式估算。
+
+**发现规则（无 token ID、无参数、无循环）。** 对 `[B, L]` 序列统计 token 频率与前驱频率：`freq >= max(6, L//10)` 为结构 token；最后一个位置的结构 token 为终止分隔符；结构、非终止、且前驱频率 `<= 4` 的 token 为中缀连接符。规则只做相等与频率比较，因此任意 64-token 词表置换都会得到逐位相同的掩码。复杂度 `O(B*L^2)`，1M profile 关闭该路径。
+
+**Track 5 协议（seeds 42/100/2026，350 步，batch 64，CUDA）。** 四变量、四查询、四个对抗 NOP；目标在 `EQ` 位置读出；四路随机基线 **25.0%**。
+
+| 模型 | 参数量 | 验证 Loss（mean ± std） | `EQ` 两跳准确率（mean ± std） | `EQ`/实体处资格迹门 | 平均训练耗时 |
+| :--- | ---: | :---: | :---: | :---: | ---: |
+| **TriCore V12 Zero-Prior Full** | 61,851 | **0.00237 ± 0.00021** | **100.00 ± 0.00%** | 0.009 / 0.909 | 171.7 s |
+| TriCore V12 Fair No-Engine-I | 61,851 | 1.4731 ± 0.0185 | 25.13 ± 0.67% | 1.0000 / 1.0000 | 141.9 s |
+| Vanilla Transformer（2 层） | 83,456 | 1.4397 ± 0.0075 | 25.01 ± 0.63% | n/a / n/a | 13.9 s |
+
+**Welch 检验（双尾）。** Full vs Fair 准确率：`t=192.524`，`df=2.000`，**`p=2.70e-05`**；Full vs Transformer 准确率：`t=206.869`，`df=2.000`，**`p=2.34e-05`**；Full vs Fair loss：`t=-137.883`，`df=2.001`，**`p=5.25e-05`**；Full vs Transformer loss：`t=-333.867`，`df=2.003`，**`p=8.81e-06`**。每组只有 3 个 seed，这是对 3 个观测值的精确算术，不是总体推断。
+
+**Track 7 协议（seeds 42/100/2026，400 步，batch 64，CUDA）。**
+
+每条序列先声明变量并写入旧字面量，再覆写为新字面量，插入 NOP 后通过 alias 查询；查询 `EQ` 的监督目标是**新字面量**，四路随机基线 25.0%。两个 TriCore 臂共享同一惊奇门写路径，唯一差异是 `enable_delta_rule=True`（带擦除项）与 `False`（纯 Hebbian 外积）；Fair No-Engine-I 保留 Delta 但关闭 `enable_surprise_gate`；Transformer 不接收 token-role 先验。seeds `42/100/2026`，400 步，batch 64，CUDA。
+
+| 变体 | 参数量 | 新值准确率（mean ± std） | 旧值混淆（mean ± std） | 验证 Loss（mean ± std） | 平均训练耗时 |
+| :--- | ---: | :---: | :---: | :---: | ---: |
+| **TriCore V12 Delta Full** | 61,851 | **100.00 ± 0.00%** | **0.00 ± 0.00%** | **0.00227 ± 0.00012** | 175.0 s |
+| TriCore V12 Hebbian Full | 61,851 | 73.71 ± 42.22% | 1.06 ± 0.95% | 0.6164 ± 0.9452 | 167.2 s |
+| TriCore V12 Fair No-Engine-I Delta | 61,851 | 25.12 ± 0.41% | 0.00 ± 0.00% | 1.7284 ± 0.0234 | 141.5 s |
+| Vanilla Transformer（2 层） | 83,456 | 24.28 ± 0.41% | 0.00 ± 0.00% | 1.4840 ± 0.0674 | 3.3 s |
+
+逐 seed 新值准确率：Delta **100.00/100.00/100.00%**；Hebbian **98.67/97.50/24.96%**；Fair No-Engine-I Delta **24.65/25.39/25.31%**；Transformer **24.22/24.73/23.91%**。Delta 在三个 seed 上全部稳定，且从未返回旧值。Hebbian 在 seed 42/100 接近满分，但在 seed 2026 退化为随机水平（24.96%，验证 loss 1.7077），因此其三 seed 均值（73.71 ± 42.22%）不是稳健效应。**精确双尾 Welch 检验：** Delta vs Fair 新值 `t=318.03`，`df=2.00`，**`p=9.89e-06`**；Delta vs Transformer `t=316.76`，`df=2.00`，**`p=9.97e-06`**；Delta vs Hebbian `t=1.078`，`df=2.00`，**`p=0.394`**（不显著），旧值 `p=0.194`。可以支持的结论是：动态写入引擎是必要的（Delta 与成功训练的 Hebbian 都远高于 25.0% 随机基线），而 Delta 是三个 seed 都保持稳定的版本；每组只有 3 个观测值，**不能**据此宣称总体层面的 Delta > Hebbian 优势。
+
+**Track 4B 协议（batch 1，FP32，RTX 3060）。** Transformer 使用真实的 2 层缓存解码：每个长度都实际分配 K/V、写入并做全因果 cache 注意力。TriCore 使用原生 `forward_step` 状态路径。65K 以下 8 次 warm-up + 32 次计时；65K–131K 为 4 + 16；262K–1M 为 2 + 8。`Alloc` 是 `empty_cache()` 后 `torch.cuda.memory_allocated()` 的实测增量。
+
+| 长度 | TriCore 状态（B） | Transformer K+V cache（B） | cache（二进制） | 缩减 | TriCore ms/token | Transformer ms/token |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 | 17,408 | 262,144 | 256.00 KiB | 15.1× | 2.596 | 1.277 |
+| 512 | 17,408 | 1,048,576 | 1.00 MiB | 60.2× | 3.091 | 1.408 |
+| 2,048 | 17,408 | 4,194,304 | 4.00 MiB | 240.9× | 3.249 | 1.675 |
+| 8,192 | 17,408 | 16,777,216 | 16.00 MiB | 963.8× | 3.151 | 3.339 |
+| 16,384 | 17,408 | 33,554,432 | 32.00 MiB | 1,927.5× | 2.893 | 5.311 |
+| 32,768 | 17,408 | 67,108,864 | 64.00 MiB | 3,855.1× | 2.784 | 10.519 |
+| 65,536 | 17,408 | 134,217,728 | 128.00 MiB | 7,710.1× | 3.221 | 18.257 |
+| 131,072 | 17,408 | 268,435,456 | 256.00 MiB | 15,420.2× | 3.245 | 35.382 |
+| 262,144 | 17,408 | 536,870,912 | 512.00 MiB | 30,840.5× | 3.039 | 71.015 |
+| 524,288 | 17,408 | 1,073,741,824 | 1.00 GiB | 61,680.9× | 2.879 | 137.640 |
+| **1,048,576** | **17,408** | **2,147,483,648** | **2.00 GiB** | **123,361.9×** | **3.794** | **274.275** |
+
+TriCore 状态在所有长度恒为 **17,408 B = 17.00 KiB / 样本**。`L=1,048,576` 时，真实缓存 Transformer 的 K/V 分配为 **2,147,483,648 B（2.00 GiB）**，是 TriCore 状态的 **123,361.9×**；解码延迟为 **274.275 ms/token**，TriCore 为 **3.794 ms/token**，前者慢 **72.30×**。实测延迟交叉点在 `L=8,192`（3.339 vs 3.151 ms/token）；在其之下，小尺寸缓存 Transformer 更快。65,536–131,072 使用 16 次计时 + 4 次 warm-up，262,144–1,048,576 使用 8 次计时 + 2 次 warm-up；32,768 仍为 32 + 8。以上均为单机 RTX 3060、batch 1、FP32 的实测，不是服务吞吐结论。
+
+> **范围。** Track 5/Track 7 每组只有 3 个观测值，不构成总体推断；Track 4B 是单机 B=1 实测，不是服务吞吐。自主发现是面向规则闭合语法的短序列角色先验，不是通用 parser。100% 结果来自闭合合成语法，不外推为通用推理能力。
+
+**V12 实测耗时：** **493.8 s**（Track 5 三 seed + Track 7 四臂 × 三 seed + Track 4B 十一个长度；RTX 3060 参考机）。
+
+
 
 ## V11（v1.4.0）— 四跳深链召回、三 seed Welch 检验与 128K CUDA 实测
 
@@ -86,9 +146,9 @@ TriCore 状态在所有长度恒为 **17,408 B = 17.00 KiB / 样本**；128K 时
 
 ---
 
-**日期：** 2026-10-22  
-**版本：** `tricore-arch` 1.4.0  
-**状态：** V11 完成；新增四跳单次前向链式召回（`reset_trace_tokens` 分隔符复位）、Track 5 三 seed Welch 检验、128K 真实 CUDA 显存/延迟实测与 2×3 主图；V10 突触资格迹、V9 零 `F_seq`、V7 原生 O(1) 流式、3-Hop 链式推理与真实 Python 源码 Held-Out LM 全部保留  
+**日期：** 2026-10-24  
+**版本：** `tricore-arch` 1.5.0  
+**状态：** V12 完成；新增零先验无监督语法角色发现、可切换 Delta rule、Track 7 动态变量覆写、1,048,576-token 真实 CUDA 显存/延迟实测与 2×3 主图；V11 四跳链、V10 突触资格迹、V9 零 `F_seq`、V7 原生 O(1) 流式与真实 Python 源码 Held-Out LM 全部保留  
 **实测报告：** `results/BENCHMARK_REPORT.md`  
 **图表：** `results/tricore_vs_transformer.png`、`results/tricore_v11_masterpiece.png`  
 **运行设备：** CUDA（RTX 3060；V11 Track 5/6 与 Track 4B 实测）；CUDA（V9/V10 历史）
@@ -280,26 +340,29 @@ TriCore 状态为 `(D + H*d_head^2 + H*d_head) * 4 = 17,408` B = **17.00 KiB / �
 | `demo_showcase.py` | ✅ 已创建 | 一键 3-hop 流式演示，无需 checkpoint，CPU/CUDA 均可运行 |
 | `LICENSE` | ✅ 已创建 | MIT License |
 | `.gitignore` | ✅ 已创建 | Python 缓存、虚拟环境、编辑器文件；保留 `results/` 报告与 PNG |
-| `pyproject.toml` | ✅ 已更新 | `tricore-arch` 1.4.0，Python ≥3.10，torch/numpy/matplotlib，MIT |
-| `README.md` | ✅ 已更新 | V11 Track 6/5/4B、128K 实测、六面板图，V10/V9/V6/V7 历史数据保留 |
-| `SPEC_V2.md` | ✅ 已更新 | V11 reset 规范与 Track 5/6/4B，V10 Track 5、V9 规范/4 链 Track 4A/32K 历史保留 |
+| `pyproject.toml` | ✅ 已更新 | `tricore-arch` 1.5.0，Python ≥3.10，torch/numpy/matplotlib，MIT |
+| `README.md` | ✅ 已更新 | V12 零先验/Delta/1M 顶部章节 + V11/V10/V9/V6/V7 历史数据保留 |
+| `SPEC_V2.md` | ✅ 已更新 | V12 规范与 Track 5/7/4B，V11/V10/V9 历史规范保留 |
 | `requirements.txt` | ✅ 已存在 | `torch>=2.0`、`numpy>=1.24`、`matplotlib>=3.7` |
 | `tricore/__init__.py` | ✅ 已更新 | 导出 block/LM/baseline 与全部任务加载器 |
-| `tricore/model.py` | ✅ 已更新 | `tricore_fused_scan`、双模型、`init_state` / `forward_step`、`reset_trace_tokens` / `reset_mask` |
-| `tricore/tasks.py` | ✅ 已更新 | 2-Hop MQAR + 因果字节码 + 3-Hop/4-Hop 召回 + 真实 Python 源码 held-out 字节流 |
+| `tricore/model.py` | ✅ 已更新 | `tricore_fused_scan`、双模型、`init_state` / `forward_step`、`reset_trace_tokens` / `reset_mask`、V12 `autonomous_syntax` 零先验 mask 与 `enable_delta_rule` |
+| `tricore/tasks.py` | ✅ 已更新 | 2-Hop MQAR + 因果字节码 + 3-Hop/4-Hop 召回 + Track 7 动态覆写 + 真实 Python 源码 held-out 字节流 |
 | `tests/test_sanity.py` | ✅ 已存在 | 前向/反向/形状/梯度流 |
 | `tests/test_v5.py` | ✅ 已更新 | JIT 三元组对 Python 参考的四组 scan flag 等价性、零 `F_seq` 检查 + 因果字节码形状/反向 |
-| `tests/test_v7_streaming.py` | ✅ 已更新 | 流式等价、17 KiB 恒定状态、3-Hop/真实语料梯度流、4-Hop reset 路径与 parity |
+| `tests/test_v7_streaming.py` | ✅ 已更新 | 流式等价、17 KiB 恒定状态、3-Hop/真实语料梯度流、4-Hop reset parity、V12 Delta parity、零先验 mask 置换不变性 |
 | `run_experiment.py` | ✅ 已更新 | V6 双赛道、Track 1 五组消融、grad clipping、报告与 2×2 图 |
 | `run_v7_benchmark.py` | ✅ 已创建 | 仅运行 V7 流式检查与 Track 3，不重跑 V6 |
-| `results/BENCHMARK_REPORT.md` | ✅ 已生成 | V11 Track 6/5/4B 顶部章节 + V6/V7/V9/V10 表格 |
+| `run_v12_apex.py` | ✅ 已创建 | V12 零先验 Track 5/7、Delta/Hebbian、1M CUDA 与 2×3 图 |
+| `results/BENCHMARK_REPORT.md` | ✅ 已生成 | V12 顶部章节 + V11/V10/V9/V7/V6 历史表格 |
 | `results/V9_METRICS.json` | ✅ 已生成 | V9 全部 Track 4A/4B 原始指标与协议 |
 | `results/V11_METRICS.json` | ✅ 已生成 | V11 Track 5/6/4B 原始指标、Welch 检验与协议 |
-| `results/tricore_vs_transformer.png` | ✅ 已生成 | V11 2×3 六面板主图 |
-| `results/tricore_v11_masterpiece.png` | ✅ 已生成 | 同一主图的发布路径 |
+| `results/V12_METRICS.json` | ✅ 已生成 | V12 零先验 Track 5/7、Delta/Hebbian、1M CUDA 原始指标与协议 |
+| `results/tricore_vs_transformer.png` | ✅ 已生成 | V12 2×3 六面板主图（master 路径） |
+| `results/tricore_v12_apex.png` | ✅ 已生成 | V12 2×3 主图发布路径 |
+| `results/tricore_v11_masterpiece.png` | ✅ 已生成 | V11 历史六面板图 |
 | `REPORT_FOR_USER.md` | ✅ 本文件 | 完整交付说明 |
 
-**Git-ready 说明：** 仓库根目录是 Python 项目，无密钥、无本地绝对路径、无大数据集；`results/BENCHMARK_REPORT.md`、`results/V11_METRICS.json` 与两张主图作为可复现证据保留。提交前建议执行：
+**Git-ready 说明：** 仓库根目录是 Python 项目，无密钥、无本地绝对路径、无大数据集；`results/BENCHMARK_REPORT.md`、`results/V12_METRICS.json` 与主图作为可复现证据保留。提交前建议执行：
 
 ```bash
 git status --short
@@ -310,6 +373,13 @@ python run_experiment.py --steps 2 --code-steps 2   # 可选快速冒烟
 ---
 
 ## 6. 复现命令
+
+**V12 新增（v1.5.0）：**
+
+```bash
+python run_v12_apex.py          # 零先验 Track 5 三 seed + Track 7 Delta/Hebbian 三 seed + 1M-token CUDA + 2×3 主图
+python run_v12_apex.py --steps5 5 --steps7 10 --seeds 42 --max-length 512 --skip-plot --metrics _smoke_v12.json
+```
 
 **V11 新增（v1.4.0）：**
 
@@ -345,12 +415,13 @@ python tests/test_v7_streaming.py
 
 **关键文件：**
 
-- `tricore/model.py`：`@torch.jit.script tricore_fused_scan`（零 `F_seq` 三元组返回）、融合多跳 `TriCoreBlock`、`TriCoreLM`、`BaselineTransformerLM`、`init_state` / `forward_step`
+- `tricore/model.py`：`@torch.jit.script tricore_fused_scan`（零 `F_seq` 三元组返回）、融合多跳 `TriCoreBlock`、零先验 `_discover_autonomous_masks`、`TriCoreLM`、`BaselineTransformerLM`、`init_state` / `forward_step`
 - `tricore/tasks.py`：2-Hop MQAR、因果字节码 `generate_contextual_code_lm_batch`、3-Hop `generate_3hop_recall_batch`、真实源码 `load_real_python_corpus_batches`
 - `run_experiment.py`：Track 1 五组消融、Track 2 两模型、V6 计时、cache 核算、Markdown 报告、matplotlib 2×2 图
 - `run_v7_benchmark.py`：流式等价/延迟/状态核算、Track 3A 三模型、Track 3B 两模型，并追加报告
 - `tests/test_v5.py`：JIT 与 Python 参考在 `enable_surprise_gate` × `enable_fast_weight` × `enable_adaptive_loop` 组合下对 `h_seq`、`mem_seq`、`surprise_trace` 的 `allclose` 等价性；`forward` 与逐 token `forward_step` 的 `<1e-6` 等价性；`TriCoreLM` 前向/反向；因果字节码的形状、`pos + 1` mask、反向梯度检查
-- `tests/test_v7_streaming.py`：流式等价、17,408 bytes 恒定状态、3-Hop/真实语料形状与梯度检查、4-Hop `reset_trace_tokens` 路径与 parity；完整套件 **9 passed**
+- `run_v12_apex.py`：零先验 Track 5/7、Delta/Hebbian 对照、1,048,576-token CUDA 实测、2×3 主图
+- `tests/test_v7_streaming.py`：流式等价、17,408 bytes 恒定状态、3-Hop/真实语料形状与梯度检查、4-Hop `reset_trace_tokens` 路径与 parity、V12 Delta parity、零先验 mask 的 Track 5/7 与词表置换不变性；完整套件 **11 passed**
 
 ---
 
@@ -423,17 +494,25 @@ V9 的证据是：训练期不再物化 `F_seq`，Engine III 已融合进 JIT sc
 | V11 Track 5：三 seed Welch | ✅ Full 100.00 ± 0.00%，Fair 24.80 ± 1.12%，Transformer 25.01 ± 0.63%；p=7.35e-05 / 2.34e-05 |
 | V11 Track 4B：128K 真实 CUDA | ✅ 17,408 B 恒定 vs 256.00 MiB = 15,420.2×；128K 延迟 2.737 vs 35.548 ms/token |
 | V11 六面板主图 | ✅ `results/tricore_vs_transformer.png` + `results/tricore_v11_masterpiece.png` |
+| V12 零先验自主语法发现 | ✅ 无 token ID / 无学习角色表；任意 64-token 词表置换后 EQ/SEMI mask 逐位一致；状态仍为 17,408 B |
+| V12 Track 5：三 seed 零先验 | ✅ Full 100.00 ± 0.00%，Fair 25.13 ± 0.67%，Transformer 25.01 ± 0.63%；Welch p=2.70e-05 / 2.34e-05 |
+| V12 Track 7：Delta vs Hebbian | ✅ Delta 新值 100.00 ± 0.00%、旧值 0.00%；Hebbian 73.71 ± 42.22%（seed 2026 失稳至 24.96%）；Fair 25.12%；Delta vs Hebbian p=0.394（不显著，如实保留） |
+| V12 Track 4B：1M 真实 CUDA | ✅ 17,408 B 恒定 vs 2,147,483,648 B（2.00 GiB）= 123,361.9×；1M 延迟 3.794 vs 274.275 ms/token（72.30×） |
+| V12 2×3 主图 | ✅ `results/tricore_v12_apex.png` + `results/tricore_vs_transformer.png` |
+| V12 文档同步 | ✅ README / SPEC / REPORT / BENCHMARK 顶部 V12 章节；V4–V11 全部历史表格与审计记录保留 |
 | README / SPEC 同步 | ✅ 已更新为 V11 数据（V10/V9/V6/V7 保留） |
-| LICENSE / .gitignore / pyproject | ✅ 已创建；版本 1.4.0 |
-| 测试文件 | ✅ `tests/test_v5.py`、`tests/test_v7_streaming.py`；`python -m pytest -q` → **9 passed** |
-| 结果报告与图 | ✅ 已生成；V6/V7/V9/V10 历史表格保留 + V11 Track 6/5/4B 顶部章节 |
-| 原始指标 | ✅ `results/V11_METRICS.json` + `results/V10_METRICS.json` + `results/V9_METRICS.json` |
+| LICENSE / .gitignore / pyproject | ✅ 已创建；版本 1.5.0 |
+| 测试文件 | ✅ `tests/test_v5.py`、`tests/test_v7_streaming.py`；`python -m pytest -q` → **11 passed**（含 V12 Delta parity 与零先验 mask 置换不变性） |
+| 结果报告与图 | ✅ 已生成；V6/V7/V9/V10/V11 历史表格保留 + V12 Track 5/7/4B 顶部章节 |
+| 原始指标 | ✅ `results/V12_METRICS.json` + `results/V11_METRICS.json` + `results/V10_METRICS.json` + `results/V9_METRICS.json` |
 | 本汇报文件 | ✅ 已生成 |
 
 > 一句话总结：**V11 在单次前向中走通四跳：Full 达到 100.00% 域内 / 100.00% 四倍间隔，第 4 跳路由权重 0.988；三跳与两跳上限仍在 24.76% / 26.27%，2 层 Transformer 为 25.78%。Track 5 三 seed Welch：Full 100.00%，Fair 24.80%，Transformer 25.01%，p=7.35e-05 / 2.34e-05。128K 实测状态恒为 17.00 KiB vs 256.00 MiB KV cache（15,420.2×），延迟 2.737 vs 35.548 ms/token。V10 突触资格迹、V9 零 `F_seq`、V7 原生 O(1) 流式与全部历史数据继续保留。Track 6/4B 仍是单 seed/单机结果，Track 5 只有 3 个观测值；不能据此宣称通用推理、真实代码理解、总体显著性、生产吞吐或 activation-O(1)。**
 
+> V12 一句话总结：**零先验 Track 5 在三个 seed 上保持 100.00 ± 0.00%，无 token ID、无学习角色表；Track 7 的 Delta 臂新值 100.00 ± 0.00%、旧值 0.00%，Fair 与 Transformer 停在 ~25% 随机水平。Hebbian 在 seed 2026 失稳至 24.96%，因此 Delta vs Hebbian 的 p=0.394 不显著，报告不做优势宣称。Track 4B 在 L=1,048,576 实测 17,408 B 恒定状态 vs 2.00 GiB KV cache（123,361.9×），延迟 3.794 vs 274.275 ms/token（72.30×）。V4–V11 全部历史数据保留；以上为闭合合成语法、单机 B=1、每组 3 个观测值的实验记录，不是通用推理或生产吞吐结论。**
+
 ---
 
 <p align="center">
-  <i>TriCore V11 — four-hop latent chaining, three-seed Welch significance, 128K real CUDA scaling, a six-panel master figure, and constant-state one-token streaming.</i>
+  <i>TriCore V12 — zero-prior autonomous syntax discovery, Delta-rule live overwrite, one-million-token CUDA profiling, and constant 17 KiB state.</i>
 </p>

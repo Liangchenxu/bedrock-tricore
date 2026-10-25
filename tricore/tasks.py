@@ -391,3 +391,79 @@ def generate_4hop_recall_batch(
             targets[b, q_pos] = v_toks[chain_idx]
 
     return inputs.to(device), targets.to(device)
+
+
+def generate_stateful_mutation_batch(
+    batch_size: int = 64,
+    num_vars: int = 4,
+    num_queries: int = 4,
+    num_nops: int = 4,
+    vocab_size: int = 64,
+    device: str = "cpu",
+):
+    """Track 7: Stateful pointer mutation (live variable overwrite) across infix EQ.
+
+    Statements (5 tokens each):
+      1. Declaration:      [LET, alias_i, EQ, var_i,     SEMI]  (binds alias_i -> var_i)
+      2. Initial Assign:   [SET, var_i,   EQ, lit_old_i, SEMI]  (binds var_i -> lit_old_i)
+      3. Live Overwrite:   [SET, var_i,   EQ, lit_new_i, SEMI]  (overwrites var_i -> lit_new_i)
+      4. Adversarial NOP:  [NOP, var_i,   EQ, SEMI,      SEMI]  (distractor infix no-op)
+      5. Return Query:     [RET, alias_q, EQ, SEMI,      SEMI]  (predicts lit_new_q at pos + 2)
+
+    A plain Hebbian outer-product memory accumulates ``lit_old_i + lit_new_i``
+    and suffers stale-value interference.  Engine II's Delta rule erases the
+    old value with ``V_t - F_{t-1} K_{t-1}`` before writing the new one.
+    """
+    if vocab_size < 64:
+        raise ValueError("stateful mutation task requires vocab_size >= 64")
+    if not 1 <= num_vars <= 16:
+        raise ValueError("num_vars must be between 1 and 16")
+    if not 1 <= num_queries <= num_vars:
+        raise ValueError("num_queries must be between 1 and num_vars")
+    if num_nops < 0:
+        raise ValueError("num_nops must be non-negative")
+
+    SEMI, EQ, LET, SET, RET, NOP = 0, 59, 60, 61, 62, 63
+    tier = 16
+    alias_pool = torch.arange(1, 1 + tier)
+    var_pool = torch.arange(1 + tier, 1 + 2 * tier)
+    lit_pool = torch.arange(1 + 2 * tier, 1 + 3 * tier)
+
+    total_stmts = num_vars * 3 + num_nops + num_queries
+    seq_len = total_stmts * 5
+
+    inputs = torch.full((batch_size, seq_len), SEMI, dtype=torch.long)
+    targets = torch.full((batch_size, seq_len), -100, dtype=torch.long)
+
+    for b in range(batch_size):
+        a_t = alias_pool[torch.randperm(tier)[:num_vars]]
+        v_t = var_pool[torch.randperm(tier)[:num_vars]]
+        l_perm = lit_pool[torch.randperm(tier)[: num_vars * 2]]
+        l_old = l_perm[:num_vars]
+        l_new = l_perm[num_vars : num_vars * 2]
+
+        pos = 0
+        # 1. Shuffled LET declarations.
+        for i in torch.randperm(num_vars):
+            inputs[b, pos : pos + 5] = torch.tensor([LET, a_t[i], EQ, v_t[i], SEMI])
+            pos += 5
+        # 2. Shuffled initial SET assignments (stale values).
+        for i in torch.randperm(num_vars):
+            inputs[b, pos : pos + 5] = torch.tensor([SET, v_t[i], EQ, l_old[i], SEMI])
+            pos += 5
+        # 3. Shuffled live SET overwrites (updated values).
+        for i in torch.randperm(num_vars):
+            inputs[b, pos : pos + 5] = torch.tensor([SET, v_t[i], EQ, l_new[i], SEMI])
+            pos += 5
+        # 4. Adversarial NOP statements.
+        for n_i in range(num_nops):
+            v_dist = v_t[n_i % num_vars]
+            inputs[b, pos : pos + 5] = torch.tensor([NOP, v_dist, EQ, SEMI, SEMI])
+            pos += 5
+        # 5. Shuffled RET queries: target at EQ (pos + 2) is the NEW literal.
+        for i in torch.randperm(num_vars)[:num_queries]:
+            inputs[b, pos : pos + 5] = torch.tensor([RET, a_t[i], EQ, SEMI, SEMI])
+            targets[b, pos + 2] = l_new[i]
+            pos += 5
+
+    return inputs.to(device), targets.to(device)

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tricore-arch"
-version = "1.4.0"
-description = "Attention-free constant-state operator with a synaptic eligibility trace for infix EQ binding, native O(1) streaming, and 100% fair Engine ablations"
+version = "1.5.0"
+description = "Attention-free constant-state operator with zero-prior autonomous syntax discovery, Delta-rule fast weights, native O(1) streaming, and 100% fair Engine ablations"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }

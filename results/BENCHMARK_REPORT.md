@@ -1,4 +1,68 @@
-# TriCore V11 Experimental Benchmark Report
+# TriCore V12 Experimental Benchmark Report
+
+<!-- V12_BENCHMARK_SECTION -->
+## V12 (v1.5.0) — Zero-Prior Autonomous Syntax, Delta-Rule Mutation, and 1,048,576-Token CUDA Profiling
+
+**Release focus.** V12 removes the last token-ID prior from Track 5 and adds a controlled live-overwrite test. The V4-V11 record below is preserved unchanged.
+
+1. **Zero-prior syntax discovery.** `TriCoreLM(..., autonomous_syntax=True)` is constructed with `separator_token=None`, `syntax_tokens=None`, and `reset_trace_tokens=None`. Structural tokens, the terminal delimiter, and infix connectors are inferred from within-sequence token frequency and causal predecessor frequency. No vocabulary ID mask is supplied; no learned role table or recurrent state is used for discovery.
+2. **Structural eligibility direction.** At an infix connector the eligibility gate closes, reads the frozen preceding key, and does not advance `prev_k`; the write gate is closed at connectors and delimiters. This creates the shifted binding `F(alias)=var` used by the later `[RET, alias, EQ, ...]` query.
+3. **Selectable Delta rule.** `enable_delta_rule=True` applies `F_t = decay*F_{t-1} + lr*(V_t - F_{t-1}K_{t-1})K_{t-1}^T`; `False` uses the identical decay/learning-rate schedule with `lr*V_t K_{t-1}^T`. Parameter count and the 17,408-byte state are unchanged.
+4. **Track 7 live overwrite.** A variable receives an old literal, is overwritten with a new literal, is separated by a NOP, and is queried through an alias. The target is the new literal; chance is 25.0%.
+5. **Track 4B through 1,048,576 tokens.** Real allocator deltas and cached-decoder latency are measured for both models, not estimated from tensor shapes.
+
+**Discovery rule.** For each sequence, let `freq` be token frequency and `pred_freq` the frequency of each token's causal predecessor. A token is structural when `freq >= max(6, L // 10)`; the terminal delimiter is the structural token at the last position; an infix connector is structural, non-terminal, and has `pred_freq <= 4`. The tests use equality and frequency only, so any 64-token vocabulary permutation yields bit-identical masks. The path is `O(B*L^2)` and is disabled for the 1M profile.
+
+### Track 5 — zero-prior infix EQ dereference (three seeds)
+
+Protocol: 350 steps, batch 64, CUDA, four variables, four queries, four adversarial NOPs; the target is read at the EQ position; four-way chance is 25.0%.
+
+| Variant | Params | Val loss (mean ± std) | Accuracy (mean ± std) | Gate `EQ` / entity | Mean train time |
+| :--- | ---: | :---: | :---: | :---: | ---: |
+| **TriCore V12 Zero-Prior Full** | 61,851 | **0.00237 ± 0.00021** | **100.00 ± 0.00%** | 0.009 / 0.909 | 171.7 s |
+| TriCore V12 Fair No-Engine-I | 61,851 | 1.4731 ± 0.0185 | 25.13 ± 0.67% | 1.0000 / 1.0000 | 141.9 s |
+| Vanilla Transformer (2-layer) | 83,456 | 1.4397 ± 0.0075 | 25.01 ± 0.63% | n/a / n/a | 13.9 s |
+
+Exact two-tailed Welch results: Full vs Fair accuracy `t=192.524`, `df=2.000`, **`p=2.70e-05`**; Full vs Transformer accuracy `t=206.869`, `df=2.000`, **`p=2.34e-05`**; Full vs Fair loss `t=-137.883`, `df=2.001`, **`p=5.25e-05`**; Full vs Transformer loss `t=-333.867`, `df=2.003`, **`p=8.81e-06`**. Three seeds per arm; this is arithmetic on three observations, not a population claim.
+
+### Track 7 — stateful pointer mutation (Delta vs Hebbian)
+
+Each sequence declares a variable, assigns an old literal, overwrites it with a new literal, inserts a NOP, and queries through an alias. The supervised target at the query `EQ` is the **new** literal; four-way chance is 25.0%. Both TriCore arms share the same surprise-gated write path; only `enable_delta_rule` changes (`True` adds the erase term, `False` uses the plain Hebbian outer product). Fair No-Engine-I keeps Delta and disables `enable_surprise_gate`; the Transformer receives no token-role prior. Seeds `42/100/2026`, 400 steps, batch 64, CUDA.
+
+| Variant | Params | New-value accuracy (mean ± std) | Stale-value confusion (mean ± std) | Val loss (mean ± std) | Mean train time |
+| :--- | ---: | :---: | :---: | :---: | ---: |
+| **TriCore V12 Delta Full** | 61,851 | **100.00 ± 0.00%** | **0.00 ± 0.00%** | **0.00227 ± 0.00012** | 175.0 s |
+| TriCore V12 Hebbian Full | 61,851 | 73.71 ± 42.22% | 1.06 ± 0.95% | 0.6164 ± 0.9452 | 167.2 s |
+| TriCore V12 Fair No-Engine-I Delta | 61,851 | 25.12 ± 0.41% | 0.00 ± 0.00% | 1.7284 ± 0.0234 | 141.5 s |
+| Vanilla Transformer (2-layer) | 83,456 | 24.28 ± 0.41% | 0.00 ± 0.00% | 1.4840 ± 0.0674 | 3.3 s |
+
+Per-seed new-value accuracy is Delta `100.00/100.00/100.00%`, Hebbian `98.67/97.50/24.96%`, Fair `24.65/25.39/25.31%`, and Transformer `24.22/24.73/23.91%`. Delta is stable on all three seeds and never returns the stale literal. Hebbian succeeds on seeds 42 and 100 but collapses to chance on seed 2026 (24.96%, validation loss 1.7077), so its three-seed mean (73.71 ± 42.22%) is not robust. Exact two-tailed Welch tests: Delta vs Fair new value `t=318.03`, `df=2.00`, **`p=9.89e-06`**; Delta vs Transformer `t=316.76`, `df=2.00`, **`p=9.97e-06`**; Delta vs Hebbian `t=1.078`, `df=2.00`, **`p=0.394`** (not significant), and Delta vs Hebbian stale value `p=0.194`. This supports the necessity of a dynamic-write engine and the stability of Delta, but with three observations per arm it does **not** establish a population-level Delta > Hebbian advantage.
+
+### Track 4B Extended — measured CUDA state and cached decode to 1M
+
+Protocol: batch 1, FP32, real `torch.cuda.memory_allocated()` deltas after `empty_cache()`. A real two-layer cached decoder writes K/V and attends over the full causal cache. Below 65K: 8 warm-up + 32 timed steps; 65K–131K: 4 + 16; 262K–1M: 2 + 8.
+
+| Length | TriCore state (B) | Transformer K+V cache (B) | Cache (binary) | Reduction | TriCore ms/token | Transformer ms/token |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 | 17,408 | 262,144 | 256.00 KiB | 15.1x | 2.596 | 1.277 |
+| 512 | 17,408 | 1,048,576 | 1.00 MiB | 60.2x | 3.091 | 1.408 |
+| 2,048 | 17,408 | 4,194,304 | 4.00 MiB | 240.9x | 3.249 | 1.675 |
+| 8,192 | 17,408 | 16,777,216 | 16.00 MiB | 963.8x | 3.151 | 3.339 |
+| 16,384 | 17,408 | 33,554,432 | 32.00 MiB | 1,927.5x | 2.893 | 5.311 |
+| 32,768 | 17,408 | 67,108,864 | 64.00 MiB | 3,855.1x | 2.784 | 10.519 |
+| 65,536 | 17,408 | 134,217,728 | 128.00 MiB | 7,710.1x | 3.221 | 18.257 |
+| 131,072 | 17,408 | 268,435,456 | 256.00 MiB | 15,420.2x | 3.245 | 35.382 |
+| 262,144 | 17,408 | 536,870,912 | 512.00 MiB | 30,840.5x | 3.039 | 71.015 |
+| 524,288 | 17,408 | 1,073,741,824 | 1.00 GiB | 61,680.9x | 2.879 | 137.640 |
+| **1,048,576** | **17,408** | **2,147,483,648** | **2.00 GiB** | **123,361.9x** | **3.794** | **274.275** |
+
+TriCore state is exactly **17,408 B (17.00 KiB) per sample at every length**. At `L=1,048,576` the measured cached Transformer K/V allocation is **2,147,483,648 B (2.00 GiB)**, a **123,361.9x** tensor-byte reduction, and cached decode is **274.275 ms/token** versus **3.794 ms/token** for TriCore (**72.30x**). The measured crossover is at `L=8,192`; below it the small cached Transformer is faster. The 1M row uses 2 warm-up + 8 timed steps because of cache size. All values are allocator deltas and timings on one RTX 3060 at batch 1 in FP32, not serving throughput.
+
+**Scope.** Track 5 and Track 7 use three seeds per arm and do not establish population-level effects; specifically, Delta vs Hebbian is **not significant** (`p=0.394`) because Hebbian collapses on seed 2026. Track 4B is a single-machine B=1 measurement. Autonomous discovery is a closed-grammar short-sequence prior, not a general parser; the 100% scores do not establish general reasoning.
+
+**V12 runtime:** **493.8 s** for Track 5 (three seeds), Track 7 (four arms x three seeds), and Track 4B (eleven lengths) on the RTX 3060 reference machine.
+
+
 
 ## V11 (v1.4.0) — Four-Hop Chained Recall, Three-Seed Welch Tests, and 128K CUDA Profiling
 
@@ -111,6 +175,10 @@ variance check, not a significance test.
 - **Track 4A:** 4-chain 2-Hop MQAR, full five-way ablation; 350 steps, batch 64, lr 3e-3; seeds 42/100/2026; `d_model=64`, `d_fast=16`, 4 queries, train `noise_len=8` and 4x OOD `noise_len=32`; Mean ± Std (%).
 
 - **Track 4B:** Real CUDA decode-state/KV-cache allocation and latency at `L=128/512/2,048/8,192/16,384/32,768/65,536/131,072`; measured tensor bytes, allocator delta, and ms/token.
+
+- **Track 5 (V12):** Zero-prior infix `EQ` two-hop dereference over seeds 42/100/2026; 350 steps, batch 64; `autonomous_syntax=True` and no token-ID masks; exact two-tailed Welch tests.
+- **Track 7 (V12):** Stateful live variable overwrite; 400 steps, batch 64, seeds 42/100/2026; Delta rule versus Hebbian versus fair No-Engine-I and a 2-layer Transformer; 25.0% new-value chance.
+- **Track 4B (V12):** Real CUDA state/KV-cache allocation and cached decode at `L=128..1,048,576`; B=1, FP32, RTX 3060.
 
 - **Track 5 (V11):** Infix `EQ` two-hop dereference over seeds 42/100/2026; 350 steps, batch 64; exact two-tailed Welch tests on accuracy and validation loss.
 

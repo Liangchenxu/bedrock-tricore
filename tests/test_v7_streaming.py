@@ -10,6 +10,7 @@ from tricore import (
     TriCoreLM,
     generate_3hop_recall_batch,
     generate_4hop_recall_batch,
+    generate_stateful_mutation_batch,
     load_real_python_corpus_batches,
 )
 
@@ -226,11 +227,139 @@ def test_v11_4hop_recall_and_gradients():
     assert torch.allclose(full_surprise, step_surprises, atol=1e-4, rtol=1e-4)
 
 
+def test_v12_autonomous_and_delta_rule_parity():
+    torch.manual_seed(17)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # No token-ID priors: the block must learn roles autonomously.
+    model = TriCoreLM(
+        vocab_size=64,
+        d_model=32,
+        n_layers=1,
+        d_fast=8,
+        max_loops=2,
+        separator_token=None,
+        syntax_tokens=None,
+        reset_trace_tokens=None,
+    ).to(device)
+    model.eval()
+
+    batch_size, seq_len = 3, 48
+    idx = torch.randint(0, 64, (batch_size, seq_len), device=device)
+    full_by_mode = {}
+    with torch.no_grad():
+        for delta_enabled in (True, False):
+            model.enable_delta_rule = delta_enabled
+            full_logits, full_surprise = model(idx)
+            states = model.init_state(batch_size, device, torch.float32)
+            step_logits = []
+            step_surprises = []
+            for t in range(seq_len):
+                logits_t, surprise_t, states = model.forward_step(
+                    idx[:, t], states, t
+                )
+                step_logits.append(logits_t)
+                step_surprises.append(surprise_t)
+            step_logits = torch.stack(step_logits, dim=1)
+            step_surprises = torch.stack(step_surprises, dim=1).squeeze(-1)
+            assert torch.allclose(
+                full_logits, step_logits, atol=1e-5, rtol=1e-5
+            ), delta_enabled
+            assert torch.allclose(
+                full_surprise, step_surprises, atol=1e-5, rtol=1e-5
+            ), delta_enabled
+            full_by_mode[delta_enabled] = full_logits
+
+    # The Delta erase term must be functionally active, not a dead flag.
+    assert not torch.allclose(
+        full_by_mode[True], full_by_mode[False], atol=1e-6, rtol=1e-6
+    )
+
+    # Track 7 generator: 4 declarations + 2 * 4 assignments + 4 NOPs + 4
+    # queries = 20 five-token statements, hence a 100-token sequence.
+    x, y = generate_stateful_mutation_batch(
+        batch_size=2,
+        num_vars=4,
+        num_queries=4,
+        num_nops=4,
+        vocab_size=64,
+        device=device,
+    )
+    assert x.shape == (2, 100), x.shape
+    assert y.shape == (2, 100), y.shape
+    query_mask = y != -100
+    assert int(query_mask.sum().item()) == 8
+    assert torch.all(y[query_mask] >= 33)
+    assert torch.all(y[query_mask] < 49)
+
+    model.train()
+    model.enable_delta_rule = True
+    logits, _ = model(x)
+    loss = F.cross_entropy(logits.view(-1, 64), y.view(-1), ignore_index=-100)
+    loss.backward()
+    grads = [p.grad.norm().item() for p in model.parameters() if p.grad is not None]
+    assert grads
+    assert all(torch.isfinite(torch.tensor(value)) for value in grads)
+
+
+def test_autonomous_masks_use_frequency_not_token_ids():
+    """Zero-prior discovery must survive an arbitrary vocabulary permutation."""
+    from run_v10_eligibility import generate_infix_eq_batch
+
+    torch.manual_seed(23)
+    model = TriCoreLM(
+        vocab_size=64,
+        d_model=16,
+        n_layers=1,
+        d_fast=4,
+        max_loops=1,
+        separator_token=None,
+        syntax_tokens=None,
+        reset_trace_tokens=None,
+        autonomous_syntax=True,
+    )
+    x, _ = generate_infix_eq_batch(
+        batch_size=3, num_vars=4, num_queries=4, num_nops=4, device="cpu"
+    )
+    (elig, write), reset = model._discover_autonomous_masks(x)
+    eq_positions = x == 59
+    semi_positions = x == 0
+    entity_positions = (x >= 1) & (x <= 48)
+
+    assert torch.equal(elig, eq_positions)
+    assert torch.equal(write, eq_positions | semi_positions)
+    assert torch.equal(reset, semi_positions)
+    assert not bool((elig & entity_positions).any())
+    assert not bool((reset & ~semi_positions).any())
+
+    # A bijective relabelling changes every ID but not a single discovered mask.
+    perm = torch.randperm(64)
+    x_relabelled = perm[x]
+    (elig_perm, write_perm), reset_perm = model._discover_autonomous_masks(
+        x_relabelled
+    )
+    assert torch.equal(elig_perm, elig)
+    assert torch.equal(write_perm, write)
+    assert torch.equal(reset_perm, reset)
+
+    # Track 7's live-overwrite layout must be discovered by the same rule.
+    x7, _ = generate_stateful_mutation_batch(
+        batch_size=2, num_vars=4, num_queries=4, num_nops=4, device="cpu"
+    )
+    (elig7, write7), reset7 = model._discover_autonomous_masks(x7)
+    assert torch.equal(elig7, x7 == 59)
+    assert torch.equal(write7, (x7 == 59) | (x7 == 0))
+    assert torch.equal(reset7, x7 == 0)
+
+
 if __name__ == "__main__":
     test_streaming_forward_step_matches_full_forward()
     test_streaming_state_is_constant_17_kib_per_sample()
     test_three_hop_and_real_python_corpus_shapes_and_gradients()
     test_v11_4hop_recall_and_gradients()
+    test_v12_autonomous_and_delta_rule_parity()
+    test_autonomous_masks_use_frequency_not_token_ids()
     print(
-        "[PASS] V7 streaming, O(1) state, 3-hop, 4-hop and real-corpus checks passed."
+        "[PASS] V7 streaming, O(1) state, 3-hop, 4-hop, V12 Delta-rule and "
+        "Track 7 mutation checks passed."
     )

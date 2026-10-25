@@ -94,6 +94,20 @@ def compute_eq_elig_gate_stats(model: TriCoreLM, device: str) -> tuple[float, fl
     u_feat = F.silu(block.u_proj(u))
     u_surp_bias = block.surprise_u_proj(u)
     elig_logits = block.elig_gate_proj(u).view(B, L, H, 1, 1)
+    if hasattr(block, "gate_token_proj"):
+        token_logits = block.gate_token_proj(u).view(B, L, H, 2)
+        elig_logits = (
+            elig_logits
+            + token_logits[..., 1].unsqueeze(-1).unsqueeze(-1)
+            * block.gate_logit_gain
+        )
+    if hasattr(model, "gate_role_table"):
+        role_logits = model.gate_role_table(x).view(B, L, H, 2)
+        elig_logits = (
+            elig_logits
+            + role_logits[..., 1].unsqueeze(-1).unsqueeze(-1)
+            * model.gate_role_gain
+        )
     if sep_mask is not None:
         elig_sep_mask, _ = sep_mask
         elig_logits = elig_logits - elig_sep_mask.to(elig_logits.dtype).view(B, L, 1, 1, 1) * 8.0

@@ -1,4 +1,64 @@
-# TriCore V11 — Architecture Specification and Benchmark Record
+# TriCore V12 — Architecture Specification and Benchmark Record
+
+<!-- V12_SPEC_SECTION -->
+## V12 (v1.5.0) — Zero-Prior Autonomous Syntax, Delta-Rule Mutation, and 1,048,576-Token CUDA Profiling
+
+**Release focus.** V12 removes the last token-ID prior from Track 5 and adds a controlled state-mutation test:
+
+1. **Autonomous syntax discovery.** `TriCoreLM(..., autonomous_syntax=True)` is constructed with `separator_token=None`, `syntax_tokens=None`, and `reset_trace_tokens=None`. The model discovers a structural set, the terminal delimiter, and infix connectors from the current sequence's token frequencies and causal predecessor frequencies. No vocabulary ID, learned role table, or recurrent state is used for discovery.
+2. **Structural eligibility direction.** A closed eligibility gate at an infix connector reads the frozen preceding key instead of the connector address, and prevents `prev_k` from advancing. The write gate remains closed at connectors and delimiters. In the two-hop layout this yields the shifted binding `F(alias) = var`, which is exactly the address later queried by `[RET, alias, EQ, ...]`.
+3. **Selectable Delta rule.** `enable_delta_rule=True` uses `F_t = decay*F_{t-1} + lr*(V_t - F_{t-1}K_{t-1})K_{t-1}^T`; `False` uses the same `decay` and `lr` with the plain Hebbian outer product `F_t = decay*F_{t-1} + lr*V_t K_{t-1}^T`. The switch changes no parameter shape and no state size.
+4. **Track 7 live overwrite.** A variable is assigned an old literal, overwritten with a new literal, separated by a NOP, and queried through an alias. The target is the new literal. This isolates old-value erasure rather than static binding.
+5. **Track 4B to one million tokens.** Real allocator deltas and real cached-decoder latency are measured at `L=128..1,048,576` for a constant 17,408-byte TriCore state and a growing two-layer K/V cache.
+
+**Discovery rule (no token IDs, no parameters, no recurrence).** For a batch `x` of shape `[B, L]`, compute token frequencies and causal predecessor frequencies inside each sequence. A token is **structural** when `freq >= max(6, L // 10)`; the **terminal delimiter** is the structural token at the last position; an **infix connector** is structural, is not the delimiter, and has a predecessor frequency `<= 4`. These are pure equality and frequency tests, so any permutation of the 64 vocabulary IDs produces bit-identical connector/delimiter masks. The rule is `O(B*L^2)` and is disabled for the 1M profile.
+
+**Track 5 result (seeds 42/100/2026; 350 steps; batch 64; CUDA).**
+
+| Variant | Parameters | Val loss (mean ± std) | EQ two-hop accuracy (mean ± std) | Eligibility gate `EQ` / entity | Mean train time |
+| :--- | ---: | :---: | :---: | :---: | ---: |
+| **TriCore V12 Zero-Prior Full** | 61,851 | **0.00237 ± 0.00021** | **100.00 ± 0.00%** | 0.009 / 0.909 | 171.7 s |
+| TriCore V12 Fair No-Engine-I | 61,851 | 1.4731 ± 0.0185 | 25.13 ± 0.67% | 1.0000 / 1.0000 | 141.9 s |
+| Vanilla Transformer (2-layer) | 83,456 | 1.4397 ± 0.0075 | 25.01 ± 0.63% | n/a / n/a | 13.9 s |
+
+Exact two-tailed Welch results: Full vs Fair accuracy `t=192.524`, `df=2.000`, **`p=2.70e-05`**; Full vs Transformer accuracy `t=206.869`, `df=2.000`, **`p=2.34e-05`**; Full vs Fair loss `t=-137.883`, `df=2.001`, **`p=5.25e-05`**; Full vs Transformer loss `t=-333.867`, `df=2.003`, **`p=8.81e-06`**. Three seeds per arm: this is exact arithmetic on three observations, not a population claim.
+
+**Track 7 protocol (seeds 42/100/2026; 400 steps; batch 64; CUDA).**
+
+Each sequence declares a variable, assigns an old literal, overwrites it with a new literal, inserts a NOP, and queries through an alias. Supervision at the query `EQ` is the **new** literal; four-way chance is 25.0%. Both TriCore arms use the same surprise-gated write path; the only change is `enable_delta_rule=True` (erase term) versus `False` (plain Hebbian outer product). Fair No-Engine-I keeps the Delta rule but sets `enable_surprise_gate=False`. The Transformer receives no token-role prior. Seeds `42/100/2026`, 400 steps, batch 64, CUDA.
+
+| Variant | Parameters | New-value accuracy (mean ± std) | Stale-value confusion (mean ± std) | Val loss (mean ± std) | Mean train time |
+| :--- | ---: | :---: | :---: | :---: | ---: |
+| **TriCore V12 Delta Full** | 61,851 | **100.00 ± 0.00%** | **0.00 ± 0.00%** | **0.00227 ± 0.00012** | 175.0 s |
+| TriCore V12 Hebbian Full | 61,851 | 73.71 ± 42.22% | 1.06 ± 0.95% | 0.6164 ± 0.9452 | 167.2 s |
+| TriCore V12 Fair No-Engine-I Delta | 61,851 | 25.12 ± 0.41% | 0.00 ± 0.00% | 1.7284 ± 0.0234 | 141.5 s |
+| Vanilla Transformer (2-layer) | 83,456 | 24.28 ± 0.41% | 0.00 ± 0.00% | 1.4840 ± 0.0674 | 3.3 s |
+
+Per-seed new-value accuracy is Delta `100.00/100.00/100.00%`, Hebbian `98.67/97.50/24.96%`, Fair `24.65/25.39/25.31%`, and Transformer `24.22/24.73/23.91%`. Delta is stable on all three seeds and never returns the stale literal. Hebbian succeeds on seeds 42 and 100 but collapses to chance on seed 2026 (24.96%, validation loss 1.7077), so its mean is not a robust effect. Exact two-tailed Welch results: Delta vs Fair new value `t=318.03`, `df=2.00`, **`p=9.89e-06`**; Delta vs Transformer `t=316.76`, `df=2.00`, **`p=9.97e-06`**; Delta vs Hebbian `t=1.078`, `df=2.00`, **`p=0.394`** (not significant), and Delta vs Hebbian stale value `p=0.194`. The supported conclusion is that a dynamic-write engine is required and that Delta remained stable on every seed; this three-observation experiment does not establish a population-level Delta > Hebbian advantage.
+
+**Track 4B protocol (batch 1, FP32, RTX 3060).** The baseline is a real two-layer cached decoder: K/V tensors are allocated, written, and attended over the full causal cache. TriCore runs the native `forward_step` state path. Below 65K the measurement uses 8 warm-up + 32 timed steps; 65K–131K uses 4 + 16; 262K–1M uses 2 + 8. `Alloc` is the measured `torch.cuda.memory_allocated()` delta after `empty_cache()`.
+
+| Length | TriCore state (B) | Transformer K+V cache (B) | Cache (binary) | Reduction | TriCore ms/token | Transformer ms/token |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 | 17,408 | 262,144 | 256.00 KiB | 15.1× | 2.596 | 1.277 |
+| 512 | 17,408 | 1,048,576 | 1.00 MiB | 60.2× | 3.091 | 1.408 |
+| 2,048 | 17,408 | 4,194,304 | 4.00 MiB | 240.9× | 3.249 | 1.675 |
+| 8,192 | 17,408 | 16,777,216 | 16.00 MiB | 963.8× | 3.151 | 3.339 |
+| 16,384 | 17,408 | 33,554,432 | 32.00 MiB | 1,927.5× | 2.893 | 5.311 |
+| 32,768 | 17,408 | 67,108,864 | 64.00 MiB | 3,855.1× | 2.784 | 10.519 |
+| 65,536 | 17,408 | 134,217,728 | 128.00 MiB | 7,710.1× | 3.221 | 18.257 |
+| 131,072 | 17,408 | 268,435,456 | 256.00 MiB | 15,420.2× | 3.245 | 35.382 |
+| 262,144 | 17,408 | 536,870,912 | 512.00 MiB | 30,840.5× | 3.039 | 71.015 |
+| 524,288 | 17,408 | 1,073,741,824 | 1.00 GiB | 61,680.9× | 2.879 | 137.640 |
+| **1,048,576** | **17,408** | **2,147,483,648** | **2.00 GiB** | **123,361.9×** | **3.794** | **274.275** |
+
+TriCore state remains exactly **17,408 B (17.00 KiB) per sample** at every length. At `L=1,048,576` the measured cached Transformer K/V allocation is **2,147,483,648 B (2.00 GiB)**, a **123,361.9×** tensor-byte reduction, and decode latency is **274.275 ms/token** versus **3.794 ms/token** for TriCore (**72.30×**). The measured crossover is at `L=8,192`; below it the small cached Transformer is faster. The 1M row uses 2 warm-up + 8 timed steps because of cache size. This is a single RTX 3060, batch 1, FP32 measurement, not a serving-throughput claim.
+
+**Scope.** Track 5 and Track 7 are three-seed checks with three observations per arm, not population inference. Track 4B is a single-machine B=1 measurement, not serving throughput. Autonomous discovery is a short-sequence role prior for regular closed syntax, not a general parser. The 100% scores are on closed synthetic grammars and do not establish general reasoning.
+
+**V12 runtime:** **493.8 s** for Track 5 (three seeds), Track 7 (four arms × three seeds), and Track 4B (eleven lengths) on the RTX 3060 reference machine.
+
+
 
 ## V11 (v1.4.0) — Four-Hop Chained Recall, Three-Seed Welch Tests, and 128K CUDA Profiling
 
@@ -68,20 +128,20 @@ variance check, not a significance test.
 
 ---
 
-**Project:** `tricore-arch` 1.4.0  
-**Operator:** attention-free, constant-size recurrent state, causal shifted fast-weight binding, fused latent multi-hop re-query  
+**Project:** `tricore-arch` 1.5.0  
+**Operator:** attention-free, constant-size recurrent state, causal shifted fast-weight binding, fused latent multi-hop re-query, zero-prior autonomous syntax discovery  
 **Runtime:** `@torch.jit.script tricore_fused_scan` for the O(1) state and zero-`F_seq` multi-hop training, plus native `init_state` / `forward_step` per-token decoding  
-**Status:** research reference; V11 Track 6 four-hop chaining + three-seed Track 5 Welch tests + 128K CUDA profiling; V10 Track 5, V9 zero-`F_seq`/4-chain verification, and V6/V7 records preserved  
+**Status:** research reference; V12 zero-prior Track 5, Delta-vs-Hebbian Track 7, and 1,048,576-token CUDA profiling; V11 Track 6 four-hop chaining + three-seed Welch tests + 128K CUDA profiling, V10 Track 5, V9 zero-`F_seq`/4-chain verification, and V6/V7 records preserved  
 **Executable source of truth:** `tricore/model.py`  
 **Benchmark source of truth:** `results/BENCHMARK_REPORT.md`
 
-> **Document provenance.** This specification describes V11; V10/V9/V7/V6 records are retained. The equations, shapes, flags, state accounting, reset mask, and streaming API mirror `tricore/model.py`, `tricore/tasks.py`, `run_experiment.py`, `run_v9_verification.py`, and `run_v11_flagship.py`. V11 adds no trainable parameters: `reset_trace_tokens` is a constant token-role mask. V9 remains additive to V6/V7 at the API level and removes the training-only `F_seq` snapshot tensor by fusing Engine III into the JIT scan. The benchmark numbers are artifacts generated on the reference machine. If this document and the code disagree, the code wins and this document must be corrected.
+> **Document provenance.** This specification describes V12; V11/V10/V9/V7/V6 records are retained. The equations, shapes, flags, state accounting, autonomous syntax masks, reset mask, and streaming API mirror `tricore/model.py`, `tricore/tasks.py`, `run_experiment.py`, `run_v9_verification.py`, `run_v11_flagship.py`, and `run_v12_apex.py`. V12 adds no trainable parameters: `autonomous_syntax` derives token roles from within-sequence frequency, and `enable_delta_rule` selects the erase term without changing shapes or state. V11 adds no trainable parameters: `reset_trace_tokens` is a constant token-role mask. V9 remains additive to V6/V7 at the API level and removes the training-only `F_seq` snapshot tensor by fusing Engine III into the JIT scan. The benchmark numbers are artifacts generated on the reference machine. If this document and the code disagree, the code wins and this document must be corrected.
 
 ---
 
 ## 1. Scope
 
-TriCore V11 is a sequence operator with three independently ablatable mechanisms:
+TriCore V12 is a sequence operator with three independently ablatable mechanisms plus a zero-prior syntax-role discovery path:
 
 1. **Engine I — Surprise-Gated State Collapse and Write Protection:** a gated recurrent vector `h_t`, plus a learned per-head write gate on the fast-weight learning rate.
 2. **Engine II — Subspace-Aligned Causal Shifted Fast Weights:** a per-head delta-rule matrix `F_t` that binds `K_{t-1}` to `V_t`, with a shared canonical address for Q/K/V.
@@ -103,6 +163,13 @@ V9 adds one runtime change and two evaluations:
 - **Zero-`F_seq` training:** Engine III's fixed re-query is inside `tricore_fused_scan`; it uses the current `F_mat` at each timestep and returns `(h_seq, mem_seq, surprise_trace)`. The only sequence-wide memory read is `mem_seq: [B, L, H*d_head]`; `F_seq: [B, L, H, d_head, d_head]` is never allocated.
 - **Track 4A:** a 4-chain 2-Hop MQAR with four queries, training `noise_len=8`, 4x OOD `noise_len=32`, `d_model=64`, `d_fast=16`, 350 steps, and three seeds; all five models are reported as mean ± std.
 - **Track 4B:** real CUDA allocation and cached-decoding latency at `L=128..32,768`. V11 extends the same measured protocol to `L=131,072`.
+
+V12 adds zero-prior role discovery and a selectable Delta rule:
+
+- `TriCoreLM(..., autonomous_syntax=True)` with `separator_token=None`, `syntax_tokens=None`, and `reset_trace_tokens=None` discovers infix connectors, write-protected structural tokens, and the terminal delimiter from within-sequence frequency and causal adjacency. It uses no vocabulary IDs and adds no recurrent state.
+- `enable_delta_rule=True` selects `F_t = decay*F_{t-1} + lr*(V_t - F_{t-1}K_{t-1})K_{t-1}^T`; `False` selects the Hebbian `F_t = decay*F_{t-1} + lr*V_t K_{t-1}^T` with identical decay/learning-rate terms.
+- **Track 7** measures stateful live variable overwrite, where a Delta erase is compared with Hebbian accumulation and a fair No-Engine-I ablation.
+- **Track 4B Extended** profiles real CUDA state/cache allocation and cached decode through `L=1,048,576`.
 
 V11 adds one operator prior and three evaluations:
 
@@ -133,20 +200,22 @@ tricore-arch/
 │   ├── model.py             # tricore_fused_scan, TriCoreBlock, TriCoreLM,
 │   │                        # BaselineTransformerLM, init_state/forward_step
 │   └── tasks.py             # 2-hop MQAR, Causal Bytecode LM, 3-hop/4-hop recall,
-│                            # real Python source held-out byte stream
+│                            # stateful mutation, real Python source byte stream
 ├── tests/
 │   ├── test_sanity.py       # forward/backward/shape/gradient-flow
 │   ├── test_v5.py           # four-output JIT equivalence + causal bytecode backward
-│   └── test_v7_streaming.py # streaming, 17 KiB state, 3-hop/4-hop gradients/parity
+│   └── test_v7_streaming.py # streaming, 17 KiB state, 3-hop/4-hop, V12 zero-prior masks
 ├── results/
-│   ├── BENCHMARK_REPORT.md  # V11 top sections + preserved V6/V7/V9/V10 records
+│   ├── BENCHMARK_REPORT.md  # V12 top sections + preserved V6/V7/V9/V10/V11 records
 │   ├── tricore_vs_transformer.png
 │   ├── tricore_v11_masterpiece.png
-│   └── V11_METRICS.json
+│   ├── tricore_v12_apex.png
+│   └── V12_METRICS.json
 ├── run_experiment.py        # V6 dual-track training, ablation, cache, report, plot
 ├── run_v7_benchmark.py      # V7 streaming/Track 3 benchmark; does not rerun V6
 ├── run_v9_verification.py   # V9 five-way 3-seed Track 4A + 32K Track 4B
 ├── run_v11_flagship.py      # V11 Track 5/6/4B + six-panel figure
+├── run_v12_apex.py          # V12 zero-prior Track 5/7 + 1M-token CUDA apex
 ├── requirements.txt
 ├── pyproject.toml           # installable package, MIT
 ├── LICENSE                  # MIT
@@ -163,7 +232,7 @@ numpy>=1.24.0
 matplotlib>=3.7.0
 ```
 
-`pyproject.toml` declares `tricore-arch==1.4.0`, Python `>=3.10`, and the same runtime dependencies. `pip install -e .` installs the `tricore` import package.
+`pyproject.toml` declares `tricore-arch==1.5.0`, Python `>=3.10`, and the same runtime dependencies. `pip install -e .` installs the `tricore` import package.
 
 ### 2.2 Public API
 
@@ -368,8 +437,22 @@ TriCoreLM(
     enable_surprise_gate: bool = True,
     enable_fast_weight: bool = True,
     enable_adaptive_loop: bool = True,
+    separator_token: int | None = None,
+    syntax_tokens: tuple | None = None,
+    reset_trace_tokens: tuple | None = None,
+    enable_delta_rule: bool = True,
+    autonomous_syntax: bool = False,
 )
 ```
+
+When `autonomous_syntax=True` and all three token-role arguments are `None`,
+`TriCoreLM` discovers the roles from the sequence itself: tokens occurring at
+least `max(6, L // 10)` times are structural; the structural token at the last
+position is the delimiter (`reset_mask`); any other structural token whose
+predecessor occurs at most four times is an infix connector (eligibility gate
+closed).  The write gate closes on every structural token.  The discovery is
+purely a function of equality/frequency, so arbitrary vocabulary permutations
+produce identical masks.  It adds no parameters and no recurrent state.
 
 `d_fast` is passed to `TriCoreBlock` as `d_head`; `n_heads` is fixed at 4. The embedding has no positional table. `final_norm` and a bias-free `lm_head` produce logits. The returned surprise is the mean across layers.
 
@@ -407,6 +490,39 @@ logits_t, surprise_t, new_states = lm.forward_step(idx_t, states, step_idx)
 `TriCoreBlock.forward_step` performs the same causal-shifted Engine I update, Engine II delta-rule write/read, fixed-hop Engine III refinement, and readout as `forward` for one timestep. `step_idx == 0` skips the fast-weight write exactly as the scan does. `TriCoreLM.init_state` returns one block state per layer; a single block state is also accepted for a one-layer model. Calling `forward_step` for `t=0..L-1` and stacking the logits must match `forward(idx)`; V9 checks both logits and surprise with `< 1e-6` maximum absolute error.
 
 The streaming state excludes the old training-only `F_seq` tensor entirely. `forward_step` has O(1) persistent inference state, and V9's training scan no longer materializes `F_seq`; it returns the fused `mem_seq` read instead.
+
+### 3.10 V12 zero-prior syntax discovery
+
+With `autonomous_syntax=True` and all token-role arguments `None`, the LM builds three boolean masks from `idx` alone:
+
+```text
+freq[b,t]        = sum_u (idx[b,t] == idx[b,u])
+structural       = freq >= max(6, L // 10)
+delimiter        = structural & (idx == idx[:, -1:])
+infix_connector  = structural & ~delimiter & (freq_at_previous_position <= 4)
+```
+
+`write_sep_mask = structural` closes the write gate at every repeated syntax token. `elig_sep_mask = infix_connector` closes the eligibility gate only at the infix connector. `reset_mask = delimiter` clears `prev_k` after the delimiter update. All three are computed once per full forward and passed to every layer.
+
+The eligibility gate has two coupled effects:
+
+```math
+q_t^{\text{read}} = \operatorname{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right)
+```
+
+```math
+\text{prev\_k}_{t+1} = \operatorname{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right)
+```
+
+Thus `e_t \approx 0` at `alias EQ var` reads the alias trace and freezes `prev_k`; at the following `var` the value is written at the alias key, producing the shifted binding `F(alias)=var`. This is why the direction of the gate matters: an open-at-EQ convention would write `F(EQ)=var` and could not support `alias -> var -> lit`.
+
+The write rule remains
+
+```math
+F_t = \lambda F_{t-1} + \eta_{\text{eff}}\,(V_t - F_{t-1}K_{t-1})\,K_{t-1}^{T}
+```
+
+when `enable_delta_rule=True`, and drops the erase term when it is `False`. The masks add no parameters and no recurrent state. Discovery is O(B L^2) in token-equality comparisons for a short closed-syntax sequence; it is disabled for the 1M-token CUDA profile. The streaming `forward_step` API operates on one token and therefore has no sequence-frequency context; autonomous discovery is defined for the full-sequence training path.
 
 ---
 
@@ -517,6 +633,20 @@ The four token tiers are disjoint. The reference settings are `n=4`, `q=4`, `noi
 
 `load_real_python_corpus_batches` concatenates the actual bytes of `tricore/model.py`, `tricore/tasks.py`, and `run_experiment.py`, replaces non-ASCII bytes with `?`, and builds an ASCII byte vocabulary (`0..127`). The first 85% is training data; the final 15% is a strict held-out suffix. Training windows satisfy `start + seq_len + 1 <= split`, and validation windows start at or after `split`. Reference settings: `batch_size=32`, `seq_len=96`, 300 steps.
 
+### 5.5 Track 7 — Stateful live variable overwrite
+
+Each sequence contains five-token statements with shuffled ordering:
+
+```text
+[LET, alias_i, EQ, var_i,     SEMI]   # alias_i -> var_i
+[SET, var_i,   EQ, lit_old_i, SEMI]   # var_i   -> old literal
+[SET, var_i,   EQ, lit_new_i, SEMI]   # live overwrite
+[NOP, var_i,   EQ, SEMI,      SEMI]   # adversarial no-op
+[RET, alias_q, EQ, SEMI,      SEMI]   # target at EQ = lit_new_q
+```
+
+The query target is the **new** literal at the EQ position. A Hebbian memory accumulates `old + new` and confuses the stale value; the Delta rule erases the old value with `V_t - F_{t-1}K_{t-1}` before writing. Reference settings: `batch_size=64`, `num_vars=4`, `num_queries=4`, `num_nops=4`, sequence length 100, 400 steps, seeds 42/100/2026, 25.0% chance.
+
 ---
 
 ## 6. Training and evaluation protocol
@@ -562,9 +692,9 @@ There is no multi-seed confidence interval for the full V6/V7 Track 1/2/3 refere
 
 ## 7. Latest benchmark record
 
-**Generated by:** `python run_experiment.py`; V9/V11 append via `run_v9_verification.py` and `run_v11_flagship.py`  
+**Generated by:** `python run_experiment.py`; V9/V11/V12 append via `run_v9_verification.py`, `run_v11_flagship.py`, and `run_v12_apex.py`  
 **Report:** `results/BENCHMARK_REPORT.md`  
-**Plots:** `results/tricore_vs_transformer.png`, `results/tricore_v11_masterpiece.png`  
+**Plots:** `results/tricore_vs_transformer.png`, `results/tricore_v12_apex.png`, `results/tricore_v11_masterpiece.png`  
 **Device:** CUDA
 
 ### 7.1 V6 timing versus V4 and V5
@@ -722,7 +852,7 @@ All three outputs (`h_seq`, `mem_seq`, `surprise_trace`) must satisfy `torch.all
 3. `generate_3hop_recall_batch` shapes/targets and the real Python corpus loader support a finite gradient backward pass.
 4. `generate_4hop_recall_batch` produces shape `(4, 68)` with 16 valid targets; the V11 model uses `reset_trace_tokens=(0,)`; finite gradients and full-vs-`forward_step` parity are checked at `atol=1e-4`.
 
-The complete suite currently reports **9 passing tests**. `run_v7_benchmark.py` regenerates only the V7 streaming and Track 3 sections; it preserves the V6 Track 1/Track 2 tables in `results/BENCHMARK_REPORT.md`.
+The complete suite currently reports **11 passing tests**. `run_v7_benchmark.py` regenerates only the V7 streaming and Track 3 sections; it preserves the V6 Track 1/Track 2 tables in `results/BENCHMARK_REPORT.md`. V12 adds the Delta-rule on/off parity test and a zero-prior mask test that compares the exact Track 5/Track 7 EQ/SEMI masks before and after a random bijection of all 64 vocabulary IDs.
 
 V9 adds no new parameter names. `run_v9_verification.py` exercises the zero-`F_seq` training path under three seeds and writes `results/V9_METRICS.json`; `demo_showcase.py` exercises `init_state` / `forward_step` end to end. Track 4A is a 4-chain, five-way, 3-seed rerun, and Track 4B is a real CUDA allocation/latency measurement through `L=32,768`, both reported in sections 7.8-7.9. V11 adds no trainable parameters, writes `results/V11_METRICS.json`, and extends the measured protocol to 128K; its tests and numbers are in sections 7.10 and 8.3.
 
@@ -735,7 +865,7 @@ The V6 reference run completed on CUDA and regenerated the report and plot. `run
 - Track 2 validation PPL
 - Track 2 dereference accuracy
 
-V11's 2x3 master figure adds depth scaling, Track 5 with Welch p-values and the gate inset, Track 4A, memory to 128K, latency to 128K, and Track 2/Track 3B code modeling.
+V12's 2x3 master figure (`results/tricore_v12_apex.png`, also written to `results/tricore_vs_transformer.png`) adds zero-prior Track 5, Track 7 Delta/Hebbian, memory to 1M, latency to 1M, and code modeling. The V11 figure (`results/tricore_v11_masterpiece.png`) remains as the historical four-hop/128K summary.
 
 ### 8.5 Commands
 
@@ -747,6 +877,7 @@ python run_experiment.py
 python run_v7_benchmark.py
 python run_v9_verification.py
 python run_v11_flagship.py
+python run_v12_apex.py
 python demo_showcase.py
 python run_experiment.py --steps 2 --code-steps 2  # smoke
 ```
@@ -760,7 +891,7 @@ python run_experiment.py --steps 2 --code-steps 2  # smoke
 1. **No attention over tokens.** No softmax may mix sequence positions. The only softmax is the hop router over `max_loops + 1` slots.
 2. **O(1) state.** `h`, `F_mat`, and `prev_k` shapes must be independent of `L`.
 3. **Causal shifted write.** Engine II binds `K_{t-1}` to `V_t`; the read uses `Q_t` after the write.
-4. **Delta rule.** The write is `(V_t - F_{t-1}K_{t-1})K_{t-1}^T`.
+4. **Selectable fast-weight rule.** `enable_delta_rule=True` writes `(V_t - F_{t-1}K_{t-1})K_{t-1}^T`; `False` uses `V_t K_{t-1}^T` with the same decay and learning rate. Both keep `F_mat` as `[B, H, d_head, d_head]` and do not change the 17,408-byte state.
 5. **Per-head matrices.** `F_mat` is `[B, H, d_head, d_head]`.
 6. **Canonical address.** Q/K/V retain the shared normalized address plus residual projections.
 7. **Write protection.** Engine I retains a learned write gate; `enable_surprise_gate=False` is the unconditional-delta ablation.
@@ -777,7 +908,7 @@ python run_experiment.py --steps 2 --code-steps 2  # smoke
 - More seeds and a significance test for the full-size V6/V7 tracks (V9 does 4-chain Track 4A; V11 Track 5 does three-seed Welch on the smaller infix task).
 - 5-8 hop chains and variable `max_loops`; V11 demonstrates four hops in one forward pass.
 - Stronger adversarial writes and higher noise density.
-- Streaming latency and memory beyond the measured 128K range (1M) and against a production serving stack.
+- Streaming latency and memory beyond the measured 1M range and against a production serving stack.
 - A fused CUDA/Triton scan to replace the TorchScript loop.
 - Tuned, parameter-matched Transformer baselines at matched compute as well as parameters.
 - A larger real-code corpus with held-out files/repositories for Track 3B.
