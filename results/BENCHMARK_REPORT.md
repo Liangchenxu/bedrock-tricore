@@ -1,4 +1,32 @@
-# TriCore V12 Experimental Benchmark Report
+# TriCore V13 Experimental Benchmark Report
+<!-- V13_RELEASE_SECTION -->
+## V13 (v1.6.0) — Static Long-Term Bindings, Four-Round Hot Mutation, and the Decay-Interference Dilemma
+
+**Release focus.** V13 replaces V12's single overwrite with a stateful mutation task that cannot be solved by lowering a global Hebbian decay. Every sequence contains four shuffled declarations, two **static** variables assigned once at the beginning, two **hot** variables overwritten for **four cyclic rounds**, six adversarial NOPs, and four alias returns: 24 five-token statements, **120 tokens**, four supervised queries, and a four-way chance level of **25.0%**.
+
+1. **Static long-term retention.** Static bindings must survive every later mutation round, NOP, and query. High fast-weight decay preserves them; low decay erases them.
+2. **Multi-round hot mutation.** The same hot key is overwritten four times. Hebbian accumulation retains old values; Delta's `V_t - F_{t-1}K_{t-1}` erase term removes the addressed old value before writing the new one.
+3. **Decay-Interference Dilemma.** Hebbian has one global decay for both requirements: high decay preserves static bindings but accumulates all four hot values, while low decay preserves the newest hot value but loses the early static bindings. Delta keeps decay high and erases pointwise at each key.
+4. **No token-ID prior.** All three TriCore arms use `autonomous_syntax=True` with `separator_token=None`, `syntax_tokens=None`, and `reset_trace_tokens=None`. A hot variable occurs six times (one LET, four SETs, one NOP), so V13 raises `autonomous_entity_max_freq` from 4 to 6; the V12 default remains 4. The rule is still frequency-only and permutation-invariant.
+5. **Measured three-seed comparison.** Delta, Hebbian, Fair No-Engine-I, and a vanilla two-layer Transformer share batches, optimizer budget, and 400 steps.
+
+**Protocol.** Seeds `42/100/2026`; 400 steps; batch 64; CUDA; `d_model=64`, `d_fast=16`, `max_loops=2`; 10 evaluation batches of 64. Overall/static/hot accuracy and hot-only stale-value confusion are reported. The Transformer receives no token-role prior; Fair keeps Delta and the learned write path but disables the surprise gate.
+
+| Variant | Params | Overall query acc. | Static acc. | Hot acc. | Hot stale confusion | Val loss |
+| :--- | ---: | :---: | :---: | :---: | :---: | :---: |
+| **TriCore V13 Delta Full (Zero-Prior)** | 61,851 | 99.30 ± 0.67% | 98.70 ± 1.16% | 99.90 ± 0.18% | 0.08 ± 0.14% | 0.03 ± 0.03 |
+| TriCore V13 Hebbian Full (No Delta Erasure) | 61,851 | 46.88 ± 17.15% | 48.05 ± 25.58% | 45.70 ± 8.74% | 27.40 ± 1.24% | 1.18 ± 0.31 |
+| TriCore V13 Fair No-Engine-I | 61,851 | 37.89 ± 0.27% | 31.17 ± 0.75% | 44.61 ± 0.36% | 23.64 ± 0.44% | 1.38 ± 0.02 |
+| Vanilla Transformer (2-layer) | 83,456 | 45.57 ± 0.29% | 45.91 ± 0.16% | 45.23 ± 0.56% | 19.00 ± 0.35% | 1.09 ± 0.01 |
+
+Per-seed overall accuracy: Delta `99.84/99.49/98.55%`; Hebbian `36.99/66.68/36.95%`; Fair `38.20/37.70/37.77%`; Transformer `45.27/45.59/45.86%`.
+
+**Exact two-tailed Welch tests.** Delta vs Hebbian overall: `t=5.290`, `df=2.006`, **`p=0.0337`**; static: `t=3.426`, `df=2.008`, **`p=0.0752`**; hot: `t=10.734`, `df=2.002`, **`p=0.0085`**; stale-value confusion: `t=-37.849`, `df=2.049`, **`p=0.0006`**. Delta vs Fair overall: `t=147.664`, `df=2.655`, **`p=2.84e-06`**. Delta vs Transformer overall: `t=127.819`, `df=2.746`, **`p=2.89e-06`**. Hebbian vs Fair overall: `t=0.907`, `df=2.001`, **`p=0.4600`**. At the conventional 0.05 level the overall, hot, and stale contrasts reject the null; the static-only contrast is marginal (`p=0.0752`) and is not claimed as significant with three seeds.
+
+**Runtime.** Mean train time per run: Delta Full 258 s, Hebbian Full 225 s, Fair No-Engine-I 191 s, Vanilla Transformer 7 s. Total V13 suite runtime on the reference RTX 3060: **1857.9 s**. No V4-V12 table or result was removed.
+
+**Scope.** Three observations per arm on one closed synthetic grammar are not a population-level claim; Welch values are exact arithmetic on those observations and assume approximate normality. The 100% ceiling is task-specific and does not establish general reasoning. The zero-prior path is a short-sequence frequency prior whose entity bound is explicitly task-scaled for V13.
+
 
 <!-- V12_BENCHMARK_SECTION -->
 ## V12 (v1.5.0) — Zero-Prior Autonomous Syntax, Delta-Rule Mutation, and 1,048,576-Token CUDA Profiling

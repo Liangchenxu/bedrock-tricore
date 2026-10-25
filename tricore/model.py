@@ -423,6 +423,7 @@ class TriCoreLM(nn.Module):
         reset_trace_tokens: tuple = None,
         enable_delta_rule: bool = True,
         autonomous_syntax: bool = False,
+        autonomous_entity_max_freq: int = 4,
     ):
         super().__init__()
         self.enable_surprise_gate = enable_surprise_gate
@@ -430,6 +431,9 @@ class TriCoreLM(nn.Module):
         self.enable_adaptive_loop = enable_adaptive_loop
         self.enable_delta_rule = enable_delta_rule
         self.autonomous_syntax = autonomous_syntax
+        if autonomous_entity_max_freq < 0:
+            raise ValueError("autonomous_entity_max_freq must be non-negative")
+        self.autonomous_entity_max_freq = int(autonomous_entity_max_freq)
         self.embedding = nn.Embedding(vocab_size, d_model)
         # Optional constant token roles used by the infix code task.  These are
         # architectural priors, not learned token embeddings.
@@ -476,7 +480,9 @@ class TriCoreLM(nn.Module):
         * the statement delimiter is the structural token at ``idx[:, -1]``
           (the generator terminates every five-token statement with SEMI);
         * an infix connector is any other structural token whose predecessor is
-          a low-frequency entity (``freq <= 4``), e.g. ``alias EQ var``.
+          a low-frequency entity (``freq <= autonomous_entity_max_freq``,
+          default 4), e.g. ``alias EQ var``.  V13 raises the bound to 6 because
+          four repeated overwrites make a hot variable occur six times.
 
         Returns ``((elig_sep_mask, write_sep_mask), reset_mask)``.  The write
         gate closes on every structural token; the eligibility gate closes only
@@ -493,7 +499,9 @@ class TriCoreLM(nn.Module):
         is_structural = tok_freq >= max(6, L // 10)
         is_delim = (idx == idx[:, -1:]) & is_structural
         prev_is_entity = torch.zeros_like(is_structural)
-        prev_is_entity[:, 1:] = tok_freq[:, :-1] <= 4
+        prev_is_entity[:, 1:] = (
+            tok_freq[:, :-1] <= self.autonomous_entity_max_freq
+        )
         elig_sep_mask = is_structural & (~is_delim) & prev_is_entity
         write_sep_mask = is_structural
         reset_mask = is_delim

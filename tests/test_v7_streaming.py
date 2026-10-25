@@ -275,8 +275,9 @@ def test_v12_autonomous_and_delta_rule_parity():
         full_by_mode[True], full_by_mode[False], atol=1e-6, rtol=1e-6
     )
 
-    # Track 7 generator: 4 declarations + 2 * 4 assignments + 4 NOPs + 4
-    # queries = 20 five-token statements, hence a 100-token sequence.
+    # V13 Track 7 generator: 4 declarations + 2 early static assignments +
+    # 2 hot variables x 4 rounds + 4 NOPs + 4 queries = 22 five-token
+    # statements, hence a 110-token sequence when num_nops=4.
     x, y = generate_stateful_mutation_batch(
         batch_size=2,
         num_vars=4,
@@ -285,8 +286,8 @@ def test_v12_autonomous_and_delta_rule_parity():
         vocab_size=64,
         device=device,
     )
-    assert x.shape == (2, 100), x.shape
-    assert y.shape == (2, 100), y.shape
+    assert x.shape == (2, 110), x.shape
+    assert y.shape == (2, 110), y.shape
     query_mask = y != -100
     assert int(query_mask.sum().item()) == 8
     assert torch.all(y[query_mask] >= 33)
@@ -342,11 +343,28 @@ def test_autonomous_masks_use_frequency_not_token_ids():
     assert torch.equal(write_perm, write)
     assert torch.equal(reset_perm, reset)
 
-    # Track 7's live-overwrite layout must be discovered by the same rule.
-    x7, _ = generate_stateful_mutation_batch(
-        batch_size=2, num_vars=4, num_queries=4, num_nops=4, device="cpu"
+    # V13's four-round overwrite layout makes a hot variable occur more than
+    # four times, so it uses the same frequency rule with a task-scaled entity
+    # bound.  Every EQ in this layout must still be discovered as an infix.
+    v13_model = TriCoreLM(
+        vocab_size=64,
+        d_model=16,
+        n_layers=1,
+        d_fast=4,
+        max_loops=1,
+        separator_token=None,
+        syntax_tokens=None,
+        reset_trace_tokens=None,
+        autonomous_syntax=True,
+        autonomous_entity_max_freq=6,
     )
-    (elig7, write7), reset7 = model._discover_autonomous_masks(x7)
+    x7, y7 = generate_stateful_mutation_batch(
+        batch_size=2, num_vars=4, num_queries=4, num_nops=6, device="cpu"
+    )
+    assert x7.shape == (2, 120), x7.shape
+    assert y7.shape == (2, 120), y7.shape
+    assert int((y7 != -100).sum().item()) == 8
+    (elig7, write7), reset7 = v13_model._discover_autonomous_masks(x7)
     assert torch.equal(elig7, x7 == 59)
     assert torch.equal(write7, (x7 == 59) | (x7 == 0))
     assert torch.equal(reset7, x7 == 0)

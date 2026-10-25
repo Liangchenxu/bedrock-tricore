@@ -397,22 +397,29 @@ def generate_stateful_mutation_batch(
     batch_size: int = 64,
     num_vars: int = 4,
     num_queries: int = 4,
-    num_nops: int = 4,
+    num_nops: int = 6,
+    num_rounds: int = 4,
     vocab_size: int = 64,
     device: str = "cpu",
 ):
-    """Track 7: Stateful pointer mutation (live variable overwrite) across infix EQ.
+    """Track 7 (V13): Static long-term retention + multi-round pointer mutation.
 
     Statements (5 tokens each):
       1. Declaration:      [LET, alias_i, EQ, var_i,     SEMI]  (binds alias_i -> var_i)
-      2. Initial Assign:   [SET, var_i,   EQ, lit_old_i, SEMI]  (binds var_i -> lit_old_i)
-      3. Live Overwrite:   [SET, var_i,   EQ, lit_new_i, SEMI]  (overwrites var_i -> lit_new_i)
+      2. Static assign:    [SET, var_i,   EQ, lit_i,     SEMI]  (assigned once, early)
+      3. Hot overwrite:    [SET, var_i,   EQ, lit_r,     SEMI]  (repeated num_rounds times)
       4. Adversarial NOP:  [NOP, var_i,   EQ, SEMI,      SEMI]  (distractor infix no-op)
-      5. Return Query:     [RET, alias_q, EQ, SEMI,      SEMI]  (predicts lit_new_q at pos + 2)
+      5. Return Query:     [RET, alias_q, EQ, SEMI,      SEMI]  (predicts final lit at pos + 2)
 
-    A plain Hebbian outer-product memory accumulates ``lit_old_i + lit_new_i``
-    and suffers stale-value interference.  Engine II's Delta rule erases the
-    old value with ``V_t - F_{t-1} K_{t-1}`` before writing the new one.
+    Half the variables are static: they are assigned once at the beginning and
+    must survive every later mutation round and NOP until the final query.  The
+    other half are hot: they are overwritten across ``num_rounds`` cyclic rounds
+    drawing from the same active literal pool.  This is a strict
+    decay-interference dilemma.  A plain Hebbian outer product must either keep
+    a high decay (so every hot value accumulates and interferes) or lower the
+    decay (so the early static bindings vanish).  Engine II's Delta rule keeps a
+    high decay and erases each overwritten variable at its own key with
+    ``V_t - F_{t-1} K_{t-1}`` before writing the new value.
     """
     if vocab_size < 64:
         raise ValueError("stateful mutation task requires vocab_size >= 64")
@@ -422,48 +429,82 @@ def generate_stateful_mutation_batch(
         raise ValueError("num_queries must be between 1 and num_vars")
     if num_nops < 0:
         raise ValueError("num_nops must be non-negative")
+    if num_rounds < 1:
+        raise ValueError("num_rounds must be at least 1")
 
     SEMI, EQ, LET, SET, RET, NOP = 0, 59, 60, 61, 62, 63
     tier = 16
-    alias_pool = torch.arange(1, 1 + tier)
-    var_pool = torch.arange(1 + tier, 1 + 2 * tier)
-    lit_pool = torch.arange(1 + 2 * tier, 1 + 3 * tier)
+    alias_values = list(range(1, 1 + tier))
+    var_values = list(range(1 + tier, 1 + 2 * tier))
+    lit_values = list(range(1 + 2 * tier, 1 + 3 * tier))
 
-    total_stmts = num_vars * 3 + num_nops + num_queries
+    n_static = num_vars // 2
+    n_hot = num_vars - n_static
+    total_stmts = (
+        num_vars + n_static + (n_hot * num_rounds) + num_nops + num_queries
+    )
     seq_len = total_stmts * 5
 
-    inputs = torch.full((batch_size, seq_len), SEMI, dtype=torch.long)
-    targets = torch.full((batch_size, seq_len), -100, dtype=torch.long)
+    # Build Python rows and convert once per batch.  Creating a fresh
+    # ``torch.tensor`` for every five-token statement made batch generation an
+    # order of magnitude slower than the training step itself; list slicing
+    # keeps the exact same deterministic RNG call order and token layout.
+    rows = []
+    target_rows = []
+    for _ in range(batch_size):
+        a_t = [
+            alias_values[i]
+            for i in torch.randperm(tier).tolist()[:num_vars]
+        ]
+        v_t = [
+            var_values[i]
+            for i in torch.randperm(tier).tolist()[:num_vars]
+        ]
+        l_t = [
+            lit_values[i]
+            for i in torch.randperm(tier).tolist()[:num_vars]
+        ]
 
-    for b in range(batch_size):
-        a_t = alias_pool[torch.randperm(tier)[:num_vars]]
-        v_t = var_pool[torch.randperm(tier)[:num_vars]]
-        l_perm = lit_pool[torch.randperm(tier)[: num_vars * 2]]
-        l_old = l_perm[:num_vars]
-        l_new = l_perm[num_vars : num_vars * 2]
-
+        row = [SEMI] * seq_len
+        target_row = [-100] * seq_len
         pos = 0
-        # 1. Shuffled LET declarations.
-        for i in torch.randperm(num_vars):
-            inputs[b, pos : pos + 5] = torch.tensor([LET, a_t[i], EQ, v_t[i], SEMI])
+        # 1. Shuffled LET declarations for all variables.
+        for i in torch.randperm(num_vars).tolist():
+            row[pos : pos + 5] = [LET, a_t[i], EQ, v_t[i], SEMI]
             pos += 5
-        # 2. Shuffled initial SET assignments (stale values).
-        for i in torch.randperm(num_vars):
-            inputs[b, pos : pos + 5] = torch.tensor([SET, v_t[i], EQ, l_old[i], SEMI])
+
+        # 2. Early static assignments: each static variable is written once.
+        for i in torch.randperm(n_static).tolist():
+            row[pos : pos + 5] = [SET, v_t[i], EQ, l_t[i], SEMI]
             pos += 5
-        # 3. Shuffled live SET overwrites (updated values).
-        for i in torch.randperm(num_vars):
-            inputs[b, pos : pos + 5] = torch.tensor([SET, v_t[i], EQ, l_new[i], SEMI])
-            pos += 5
+
+        # 3. Hot variables: num_rounds cyclic overwrites from the shared pool.
+        final_lits = list(l_t)
+        for r in range(num_rounds):
+            perm_l = [l_t[i] for i in torch.randperm(num_vars).tolist()]
+            for h_idx in torch.randperm(n_hot).tolist():
+                var_idx = n_static + h_idx
+                lit_val = perm_l[h_idx]
+                row[pos : pos + 5] = [SET, v_t[var_idx], EQ, lit_val, SEMI]
+                pos += 5
+                if r == num_rounds - 1:
+                    final_lits[var_idx] = lit_val
+
         # 4. Adversarial NOP statements.
         for n_i in range(num_nops):
             v_dist = v_t[n_i % num_vars]
-            inputs[b, pos : pos + 5] = torch.tensor([NOP, v_dist, EQ, SEMI, SEMI])
-            pos += 5
-        # 5. Shuffled RET queries: target at EQ (pos + 2) is the NEW literal.
-        for i in torch.randperm(num_vars)[:num_queries]:
-            inputs[b, pos : pos + 5] = torch.tensor([RET, a_t[i], EQ, SEMI, SEMI])
-            targets[b, pos + 2] = l_new[i]
+            row[pos : pos + 5] = [NOP, v_dist, EQ, SEMI, SEMI]
             pos += 5
 
-    return inputs.to(device), targets.to(device)
+        # 5. Shuffled RET queries over both static and multi-round hot variables.
+        for i in torch.randperm(num_vars).tolist()[:num_queries]:
+            row[pos : pos + 5] = [RET, a_t[i], EQ, SEMI, SEMI]
+            target_row[pos + 2] = final_lits[i]
+            pos += 5
+
+        rows.append(row)
+        target_rows.append(target_row)
+
+    inputs = torch.tensor(rows, dtype=torch.long, device=device)
+    targets = torch.tensor(target_rows, dtype=torch.long, device=device)
+    return inputs, targets
