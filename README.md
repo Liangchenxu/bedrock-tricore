@@ -11,6 +11,8 @@
 </div>
 
 <p align="center">
+  <a href="https://pypi.org/project/bedrock-tricore/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/bedrock-tricore?color=blue&logo=pypi&logoColor=white"></a>
+  <a href="https://github.com/Liangchenxu/bedrock-tricore"><img alt="GitHub Repo" src="https://img.shields.io/badge/GitHub-Liangchenxu%2Fbedrock--tricore-181717?logo=github"></a>
   <a href="https://www.python.org/"><img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white"></a>
   <a href="https://pytorch.org/"><img alt="PyTorch 2.0+" src="https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?logo=pytorch&logoColor=white"></a>
   <a href="https://pytorch.org/docs/stable/jit.html"><img alt="TorchScript JIT fused" src="https://img.shields.io/badge/TorchScript-JIT%20Fused-EE4C2C?logo=pytorch&logoColor=white"></a>
@@ -25,7 +27,7 @@
 > **摘要。** `bedrock-tricore` 是一种保持恒定 O(1) 持久化推理状态（FP32 下单样本恒为 **17,408 B / 17.00 KiB**）的无注意力序列算子，结合了惊奇门控与突触资格迹（Engine I）、因果移位 Delta 规则快权重（Engine II）以及融合隐空间多跳平衡循环（Engine III）。
 
 <p align="center">
-  <img src="results/tricore_vs_transformer.png" alt="Bedrock-TriCore V13 six-panel panorama: mutation accuracy, static/hot retention, stale confusion, 1M-token memory, decode latency, and multi-hop depth" width="100%">
+  <img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/tricore_vs_transformer.png" alt="Bedrock-TriCore V13 six-panel panorama: mutation accuracy, static/hot retention, stale confusion, 1M-token memory, decode latency, and multi-hop depth" width="100%">
 </p>
 
 <p align="center"><i>Figure 0. Six-panel panorama generated from the committed V13 run: mutation quality, retention/confusion separation, long-context memory, latency, and hop-depth evidence. The figure is an output of the benchmark, not a hand-drawn conceptual diagram.</i></p>
@@ -745,7 +747,7 @@ bedrock-tricore/
 ├── run_v13_definitive.py        # V13 resumable Delta/Hebbian/Fair/Transformer
 ├── demo_showcase.py             # one-command streaming demo, no checkpoint
 ├── requirements.txt             # torch, numpy, matplotlib
-├── pyproject.toml               # installable tricore-arch 1.6.0, MIT
+├── pyproject.toml               # installable bedrock-tricore 1.6.0, MIT
 ├── LICENSE                      # MIT
 ├── .gitignore                   # caches, venvs, checkpoints; keeps reports/PNGs
 ├── SPEC.md                      # original operator specification
@@ -754,7 +756,7 @@ bedrock-tricore/
 └── README.md                    # this bilingual flagship document
 ```
 
-The import package is `tricore`; the distribution name is `tricore-arch`. `pyproject.toml` declares `tricore-arch==1.6.0`, Python `>=3.10`, and runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`.
+The import package is `tricore`; the distribution name is `bedrock-tricore`. `pyproject.toml` declares `bedrock-tricore==1.6.0`, Python `>=3.10`, and runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`.
 
 ---
 
@@ -763,7 +765,12 @@ The import package is `tricore`; the distribution name is `tricore-arch`. `pypro
 #### 6.1 Install and verify
 
 ```bash
-# From the repository root
+# Install directly from PyPI (official release)
+pip install bedrock-tricore
+
+# Or install from GitHub source in editable mode
+git clone https://github.com/Liangchenxu/bedrock-tricore.git
+cd bedrock-tricore
 python -m pip install -e .
 
 # Runtime dependencies only
@@ -1670,7 +1677,7 @@ bedrock-tricore/
 ├── run_v13_definitive.py        # V13 可续跑 Delta/Hebbian/Fair/Transformer
 ├── demo_showcase.py             # 一条命令的流式演示，无需 checkpoint
 ├── requirements.txt             # torch、numpy、matplotlib
-├── pyproject.toml               # 可安装 tricore-arch 1.6.0，MIT
+├── pyproject.toml               # 可安装 bedrock-tricore 1.6.0，MIT
 ├── LICENSE                      # MIT
 ├── .gitignore                   # 缓存、虚拟环境、checkpoint；保留报告/PNG
 ├── SPEC.md                      # 原始算子规范
@@ -1679,7 +1686,7 @@ bedrock-tricore/
 └── README.md                    # 本双语旗舰文档
 ```
 
-导入包名为 `tricore`，分发名为 `tricore-arch`。`pyproject.toml` 声明 `tricore-arch==1.6.0`、Python `>=3.10`，运行依赖 `torch>=2.0`、`numpy>=1.24`、`matplotlib>=3.7`。
+导入包名为 `tricore`，分发名为 `bedrock-tricore`。`pyproject.toml` 声明 `bedrock-tricore==1.6.0`、Python `>=3.10`，运行依赖 `torch>=2.0`、`numpy>=1.24`、`matplotlib>=3.7`。
 
 ---
 

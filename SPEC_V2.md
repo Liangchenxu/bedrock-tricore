@@ -156,7 +156,7 @@ variance check, not a significance test.
 
 ---
 
-**Project:** `tricore-arch` 1.6.0
+**Project:** `bedrock-tricore` 1.6.0
 **Operator:** attention-free, constant-size recurrent state, causal shifted fast-weight binding, fused latent multi-hop re-query, zero-prior autonomous syntax discovery  
 **Runtime:** `@torch.jit.script tricore_fused_scan` for the O(1) state and zero-`F_seq` multi-hop training, plus native `init_state` / `forward_step` per-token decoding  
 **Status:** research reference; V12 zero-prior Track 5, Delta-vs-Hebbian Track 7, and 1,048,576-token CUDA profiling; V11 Track 6 four-hop chaining + three-seed Welch tests + 128K CUDA profiling, V10 Track 5, V9 zero-`F_seq`/4-chain verification, and V6/V7 records preserved  
@@ -222,7 +222,7 @@ The evidence is three single-seed V6/V7 evaluation tracks — a 500-step five-va
 ## 2. Repository contract
 
 ```text
-tricore-arch/
+bedrock-tricore/
 ├── tricore/
 │   ├── __init__.py          # block/LM/baseline exports and all task loaders
 │   ├── model.py             # tricore_fused_scan, TriCoreBlock, TriCoreLM,
@@ -260,7 +260,7 @@ numpy>=1.24.0
 matplotlib>=3.7.0
 ```
 
-`pyproject.toml` declares `tricore-arch==1.6.0`, Python `>=3.10`, and the same runtime dependencies. `pip install -e .` installs the `tricore` import package.
+`pyproject.toml` declares `bedrock-tricore==1.6.0`, Python `>=3.10`, and the same runtime dependencies. `pip install -e .` installs the `tricore` import package.
 
 ### 2.2 Public API
 

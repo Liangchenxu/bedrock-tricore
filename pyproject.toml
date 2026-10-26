@@ -1,19 +1,22 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tricore-arch"
+name = "bedrock-tricore"
 version = "1.6.0"
-description = "Attention-free constant-state operator with zero-prior autonomous syntax discovery, Delta-rule fast weights, static-plus-multi-round state mutation, native O(1) streaming, and 100% fair Engine ablations"
+description = "Bedrock-TriCore: An Attention-Free, Constant-State O(1) Sequence Operator (17.00 KiB) with Causal Delta-Rule Fast Weights and Latent Multi-Hop Chaining"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
-authors = [{ name = "TriCore contributors" }]
-keywords = ["pytorch", "sequence-modeling", "fast-weights", "associative-memory", "torchscript"]
+license = {text = "MIT"}
+authors = [
+    {name = "Liang Chenxu (ASYS Tech)"}
+]
+keywords = ["deep-learning", "pytorch", "sequence-modeling", "fast-weights", "delta-rule", "sub-quadratic", "attention-free", "tricore", "bedrock"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -30,7 +33,15 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=7.4"]
 
+[project.urls]
+Homepage = "https://github.com/Liangchenxu/bedrock-tricore"
+Repository = "https://github.com/Liangchenxu/bedrock-tricore"
+Documentation = "https://github.com/Liangchenxu/bedrock-tricore#readme"
+"Bug Tracker" = "https://github.com/Liangchenxu/bedrock-tricore/issues"
+"PyPI Package" = "https://pypi.org/project/bedrock-tricore/"
+
 [tool.setuptools.packages.find]
+where = ["."]
 include = ["tricore*"]
 
 [tool.pytest.ini_options]
