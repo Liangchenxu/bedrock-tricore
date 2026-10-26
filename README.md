@@ -25,6 +25,10 @@
 > **Abstract.** `bedrock-tricore` is an attention-free sequence operator maintaining a constant O(1) persistent inference state (**17,408 B / 17.00 KiB** per sample at FP32). It combines surprise-gated state collapse and synaptic eligibility traces (Engine I), causal shifted Delta-rule fast weights (Engine II), and a fused latent multi-hop equilibrium loop (Engine III).
 >
 > **摘要。** `bedrock-tricore` 是一种保持恒定 O(1) 持久化推理状态（FP32 下单样本恒为 **17,408 B / 17.00 KiB**）的无注意力序列算子，结合了惊奇门控与突触资格迹（Engine I）、因果移位 Delta 规则快权重（Engine II）以及融合隐空间多跳平衡循环（Engine III）。
+>
+> **Formula rendering.** Formulas are written as Unicode plain text so they render correctly on both GitHub and PyPI; PyPI does not support LaTeX or MathJax.
+>
+> **公式渲染。** 公式使用 Unicode 纯文本表示，以确保在 GitHub 与 PyPI 上都能正确显示；PyPI 不支持 LaTeX 或 MathJax。
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/tricore_vs_transformer.png" alt="Bedrock-TriCore V13 six-panel panorama: mutation accuracy, static/hot retention, stale confusion, 1M-token memory, decode latency, and multi-hop depth" width="100%">
@@ -56,8 +60,8 @@
 
 **Bedrock** is a promise about the *persistent inference state*, not about parameter count, training memory, or floating-point throughput. A Transformer's decoding state is a growing key/value archive: every generated token appends another slice, so the state is a function of context length. Bedrock-TriCore replaces that archive with three fixed-size tensors per layer. For the reference configuration (`d_model=128`, `H=4`, `d_head=32`, FP32), the complete per-sample decode state is:
 
-```math
-M_{\text{state}} = \underbrace{128 \times 4}_{h:\ 512\ \text{B}} + \underbrace{4 \times 32 \times 32 \times 4}_{F_{\text{mat}}:\ 16{,}384\ \text{B}} + \underbrace{4 \times 32 \times 1 \times 4}_{prev\_k:\ 512\ \text{B}} = 17{,}408\ \text{B} = 17.00\ \text{KiB}.
+```text
+M_{state} = (128 × 4) [h: 512 B] + (4 × 32 × 32 × 4) [F_{mat}: 16,384 B] + (4 × 32 × 1 × 4) [prev_k: 512 B] = 17,408 B = 17.00 KiB.
 ```
 
 That number does not contain `L`. It is identical at 128 tokens, at 32K, at 131K, and at 1,048,576 tokens. The 1M-token CUDA profile measured 2,147,483,648 bytes (2.00 GiB) of K/V cache for a real two-layer cached decoder and 17,408 bytes for Bedrock-TriCore: a **123,361.9×** reduction in persistent state. Decode latency at 1M was **274.275 ms/token** for the cached Transformer and **3.794 ms/token** for TriCore, a **72.30×** per-token speed advantage. This is the sense in which Bedrock is “unbreakable”: the foundation does not grow with the height of the context.
@@ -119,32 +123,32 @@ The implementation is a compiled graph of tensor operations, not a custom CUDA k
 
 A standard causal self-attention layer compares every position with every earlier position. Its training activation cost grows as `O(L²)` and its inference cache grows as `O(L)`. For a decoder with `n_layers` layers, `n_heads` heads, head width `d_head`, and FP32 storage, the conventional K/V cache is:
 
-```math
-M_{\text{KV}}(L) = 2 \times n_{\text{layers}} \times L \times n_{\text{heads}} \times d_{\text{head}} \times 4\ \text{bytes}.
+```text
+M_{KV}(L) = 2 × n_{layers} × L × n_{heads} × d_{head} × 4 bytes.
 ```
 
 With `n_layers=2`, `n_heads=4`, `d_head=32` (`d_model=128`):
 
-```math
-M_{\text{KV}}(1{,}048{,}576) = 2 \times 2 \times 1{,}048{,}576 \times 4 \times 32 \times 4 = 2{,}147{,}483{,}648\ \text{B} = 2.00\ \text{GiB}.
+```text
+M_{KV}(1,048,576) = 2 × 2 × 1,048,576 × 4 × 32 × 4 = 2,147,483,648 B = 2.00 GiB.
 ```
 
 Bedrock-TriCore's state is independent of `L`:
 
-```math
-M_{\text{TriCore}} = (D + H d_{\text{head}}^2 + H d_{\text{head}}) \times 4 = (128 + 4 \times 32^2 + 4 \times 32) \times 4 = 17{,}408\ \text{B}.
+```text
+M_{TriCore} = (D + H d_{head}^2 + H d_{head}) × 4 = (128 + 4 × 32^2 + 4 × 32) × 4 = 17,408 B.
 ```
 
 The measured ratio is:
 
-```math
-\frac{M_{\text{KV}}(1{,}048{,}576)}{M_{\text{TriCore}}} = \frac{2{,}147{,}483{,}648}{17{,}408} = 123{,}361.9\times.
+```text
+(M_{KV}(1,048,576))/(M_{TriCore}) = (2,147,483,648)/(17,408) = 123,361.9×.
 ```
 
 Latency tells the same story once the cache is large enough to dominate memory traffic. At 128 tokens the small cached Transformer is faster (`1.277` vs `2.596 ms/token`). The measured crossover occurs at `L=8,192` (`3.339` vs `3.151 ms/token`). At 1M the Transformer reaches **274.275 ms/token**, while TriCore remains at **3.794 ms/token**:
 
-```math
-\frac{274.275}{3.794} = 72.30\times.
+```text
+(274.275)/(3.794) = 72.30×.
 ```
 
 **Protocol honesty.** These are real `torch.cuda.memory_allocated()` deltas after `empty_cache()` and real cached-decoder timings on one RTX 3060 at batch size 1, FP32. The Transformer baseline actually allocates, writes, and attends over the full causal K/V cache. Timed/warm-up steps are 32/8 through 32,768, 16/4 at 65,536–131,072, and 8/2 at 262,144–1,048,576. This is not serving throughput, not multi-batch throughput, and not a claim that TriCore's training is cheaper.
@@ -171,14 +175,14 @@ The reduction column divides the measured tensor bytes, not the allocator delta.
 
 A linear recurrent memory can be written as an outer-product accumulator. In its simplest Hebbian form, with a per-head learning rate `η` and decay `λ`:
 
-```math
-F_t = \lambda F_{t-1} + \eta\, V_t K_{t-1}^{\top}.
+```text
+F_t = λ F_{t-1} + η V_t K_{t-1}^{T}.
 ```
 
 At query key `k`, the retrieved value is `F_t k`. If the same key is written four times with values `v^{(1)},...,v^{(4)}` and no decay (`λ=1`), the read contains a superposition:
 
-```math
-F_t k = \eta \sum_{r=1}^{4} v^{(r)} + \text{crosstalk}.
+```text
+F_t k = η ∑_{r=1}^{4} v^{(r)} + crosstalk.
 ```
 
 Changing the newest value does not remove the old ones. Lowering `λ` eventually makes old contributions small, but it also attenuates **every** early binding, including the static variables that were never overwritten. That is the decay-interference dilemma:
@@ -192,14 +196,14 @@ Changing the newest value does not remove the old ones. Lowering `λ` eventually
 
 The Delta-rule fast-weight update adds a prediction-error term:
 
-```math
-F_t = \lambda_f F_{t-1} + \eta_{\text{eff},t}\left(V_t - F_{t-1}K_{t-1}\right)K_{t-1}^{\top}.
+```text
+F_t = λ_f F_{t-1} + η_{eff,t}(V_t - F_{t-1}K_{t-1})K_{t-1}^{T}.
 ```
 
-For an isolated unit-norm key `k`, with `λ_f = 1`, `η_eff = 1`, and `F_{t-1} k = v_{\text{old}}`, the new read is exactly the new value:
+For an isolated unit-norm key `k`, with `λ_f = 1`, `η_eff = 1`, and `F_{t-1} k = v_{old}`, the new read is exactly the new value:
 
-```math
-F_t k = v_{\text{old}} + (v_{\text{new}} - v_{\text{old}})(k^{\top}k) = v_{\text{new}}.
+```text
+F_t k = v_{old} + (v_{new} - v_{old})(k^{T}k) = v_{new}.
 ```
 
 This is the targeted erasure that a global decay cannot express. It is also why the V13 improvement is concentrated in the hot and stale columns: Delta is not “forgetting faster”; it is subtracting the addressed stale value before writing the replacement.
@@ -221,10 +225,10 @@ At the conventional 0.05 level the overall, hot, and stale contrasts reject the 
 
 Engine I supplies the second half of the mechanism. Its synaptic eligibility trace is the frozen previous key, and the trace-conditioned read is:
 
-```math
-q_t^{\text{read}} = \mathrm{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right),
-\qquad
-\text{prev\_k}_{t+1} = \mathrm{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right).
+```text
+q_t^{read} = normalize(e_t q_t + (1-e_t) prev_k_t),
+
+prev_k_{t+1} = normalize((1-e_t) prev_k_t + e_t K_t).
 ```
 
 When the eligibility gate closes at an infix connector (`e_t ≈ 0`), the read dereferences the preceding entity and `prev_k` does not advance. The next token's value is therefore written at that entity's key, producing the shifted binding `F(alias)=var`. When the trace is wrong, the two-hop dereference has no address to follow. The V13 Fair No-Engine-I arm keeps Delta and the learned write path but disables the surprise gate; it falls to **37.89%**, confirming that erasure alone is not enough without a stable address.
@@ -235,8 +239,8 @@ A standard model without an explicit chain-of-thought scratchpad has a depth pro
 
 With a fixed budget `L_max`, the initial read is hop 1, and each refinement step is one further latent dereference. The physical depth stays one block; the loop count is a compute budget, and the router learns how to weight each hop. In Track 6, four tiers are shuffled behind a 12-token adversarial gap. The one-layer Full model uses `max_loops=3` and reaches **100.00% in-domain / 100.00% at the 4× gap**, with query-position routing mass:
 
-```math
-w^{\text{hop}} = [0.005,\ 0.004,\ 0.003,\ 0.988].
+```text
+w^{hop} = [0.005, 0.004, 0.003, 0.988].
 ```
 
 The router puts **98.8%** of its query mass on hop 4. The two shallower budgets do not partially solve the task; they collapse onto their last available slot and remain at chance:
@@ -399,56 +403,56 @@ Notation: `B` batch, `L` sequence length, `D` model width, `H` heads, `d_head` h
 
 Each token is normalized before any projection:
 
-```math
-u_t = \mathrm{LN}(x_t), \qquad \tilde{u}_t = \mathrm{SiLU}(W_u u_t + b_u).
+```text
+u_t = LN(x_t),      ũ_t = SiLU(W_u u_t + b_u).
 ```
 
 A shared address is projected and normalized:
 
-```math
-a_t = \mathrm{normalize}(W_a u_t) \in \mathbb{R}^{H \times d_{\text{head}}}.
+```text
+a_t = normalize(W_a u_t) ∈ ℝ^{H × d_{head}}.
 ```
 
 `Q`, `K`, and `V` are residuals around that shared address, with a fixed residual scale of `0.15`:
 
-```math
-Q_t = \mathrm{normalize}\left(a_t + 0.15\,W_q u_t\right),
+```text
+Q_t = normalize(a_t + 0.15 W_q u_t),
 ```
 
-```math
-K_t = \mathrm{normalize}\left(a_t + 0.15\,W_k u_t\right),
+```text
+K_t = normalize(a_t + 0.15 W_k u_t),
 ```
 
-```math
-V_t = a_t + 0.15\,W_v u_t.
+```text
+V_t = a_t + 0.15 W_v u_t.
 ```
 
 The hop router is a softmax over the initial read plus `L_max` refinements:
 
-```math
-w_t^{\text{hop}} = \mathrm{softmax}(W_r u_t) \in \mathbb{R}^{L_{\max}+1}.
+```text
+w_t^{hop} = softmax(W_r u_t) ∈ ℝ^{L_{max}+1}.
 ```
 
 There is no positional embedding and no attention over sequence positions. The only softmax over positions is this hop router, whose support is the fixed hop budget rather than `L`. The shared normalized address is what makes a retrieved bridge reusable as the next query: a value written under an address is read back in the same metric space.
 
 **Zero-prior role discovery.** When `autonomous_syntax=True` and all token-role arguments are `None`, the model computes within-sequence occurrence counts:
 
-```math
-f_t = \sum_{u=1}^{L} \mathbf{1}\left[x_t = x_u\right].
+```text
+f_t = ∑_{u=1}^{L} 1[x_t = x_u].
 ```
 
 It then defines:
 
-```math
-\text{structural}_t = \mathbf{1}\left[f_t \ge \max(6,\ \lfloor L/10 \rfloor)\right],
+```text
+structural_t = 1[f_t ≥ max(6, ⌊ L/10 ⌋)],
 ```
 
-```math
-\text{delimiter}_t = \text{structural}_t \wedge \mathbf{1}\left[x_t = x_L\right],
+```text
+delimiter_t = structural_t ∧ 1[x_t = x_L],
 ```
 
-```math
-\text{infix}_t = \text{structural}_t \wedge \neg\text{delimiter}_t \wedge \mathbf{1}\left[f_{t-1} \le F_{\max}\right].
+```text
+infix_t = structural_t ∧ ¬delimiter_t ∧ 1[f_{t-1} ≤ F_{max}].
 ```
 
 `F_max` is `autonomous_entity_max_freq`: **4** by default (V12), **6** in V13 because one LET + four SETs + one NOP gives each hot variable six occurrences. `write_sep_mask = structural`; `elig_sep_mask = infix`; `reset_mask = delimiter`. The masks add no parameters and no recurrent state. Discovery is `O(B L²)` token-equality comparisons for a short closed-syntax sequence; it is disabled for the 1M profile, and the one-token streaming API has no sequence-frequency context. Because only equality counts matter, a permutation of vocabulary IDs leaves every mask unchanged.
@@ -457,71 +461,71 @@ It then defines:
 
 Engine I has two state effects. The first is a per-dimension collapse state `h_t`, initialized to zero. The prediction error is the absolute difference between the transformed input and the previous collapse:
 
-```math
-e_t^{\text{surp}} = \left|\tilde{u}_t - h_{t-1}\right|,
-\qquad
-g_t = \sigma\left(W_s u_t + e_t^{\text{surp}}\right).
+```text
+e_t^{surp} = |ũ_t - h_{t-1}|,
+
+g_t = σ(W_s u_t + e_t^{surp}).
 ```
 
 The scalar surprise is the mean gate activation:
 
-```math
-s_t = \frac{1}{D}\sum_{j=1}^{D} g_{t,j}.
+```text
+s_t = (1)/(D)∑_{j=1}^{D} g_{t,j}.
 ```
 
 The collapse update uses a learned per-dimension decay `λ = sigmoid(base_decay_logit)` and the surprise gate:
 
-```math
-h_t = \lambda \odot \left(1 - 0.5\,g_t\right) \odot h_{t-1} + g_t \odot \tilde{u}_t.
+```text
+h_t = λ ⊙ (1 - 0.5 g_t) ⊙ h_{t-1} + g_t ⊙ ũ_t.
 ```
 
 The second effect is write protection. A learned per-head write logit is combined with a short token-to-gate path and with the discovered structural mask:
 
-```math
-\ell_t^{w} = W_w u_t + 8\,G_w(u_t) - 8\,\text{structural}_t,
+```text
+ℓ_t^{w} = W_w u_t + 8 G_w(u_t) - 8 structural_t,
 ```
 
-```math
-\omega_t = \sigma\left(\ell_t^{w} + s_t - 0.5\right).
+```text
+ω_t = σ(ℓ_t^{w} + s_t - 0.5).
 ```
 
 The effective fast-weight learning rate is attenuated, never amplified:
 
-```math
-\eta_{\text{eff},t} = \eta \odot \omega_t,
-\qquad
-\eta = \mathrm{sigmoid}(\text{fast\_lr\_logit}).
+```text
+η_{eff,t} = η ⊙ ω_t,
+
+η = sigmoid(fast_lr_logit).
 ```
 
 This is why `enable_surprise_gate=False` is a *fair* ablation: it removes the learned write path and the surprise modulation, but it does not change parameter shapes. In that mode the implementation sets `g_t=0.5`, `s_t=0.5`, `η_eff=1.0`, `decay=1.0`, and applies no learned gate.
 
 The third effect is the synaptic eligibility trace. An eligibility gate is produced by a parallel head-wise logit, closed at infix connectors:
 
-```math
-\ell_t^{e} = W_e u_t + 8\,G_e(u_t) - 8\,\text{infix}_t,
+```text
+ℓ_t^{e} = W_e u_t + 8 G_e(u_t) - 8 infix_t,
 ```
 
-```math
-e_t = \sigma\left(\ell_t^{e} + s_t - 0.5\right).
+```text
+e_t = σ(ℓ_t^{e} + s_t - 0.5).
 ```
 
 Unlike the write gate, this gate does **not** attenuate the fast-weight write. It controls which key is addressed. The trace-conditioned query and the next trace are:
 
-```math
-q_t^{\text{read}} = \mathrm{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right),
+```text
+q_t^{read} = normalize(e_t q_t + (1-e_t) prev_k_t),
 ```
 
-```math
-\text{prev\_k}_{t+1} = \mathrm{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right).
+```text
+prev_k_{t+1} = normalize((1-e_t) prev_k_t + e_t K_t).
 ```
 
 When the gate closes at an infix connector (`e_t ≈ 0`), the read dereferences the frozen preceding entity and `prev_k` does not advance. The following token's value is written at that entity key. This is the shifted binding `F(alias)=var`, and it is the direction that makes `alias -> var -> lit` work. An open-at-EQ convention would write `F(EQ)=var` and could not support the chain.
 
 A delimiter reset is applied after the trace update:
 
-```math
-\text{prev\_k}_{t+1} \leftarrow \left(1-r_t\right)\text{prev\_k}_{t+1},
-\qquad r_t = \text{delimiter}_t.
+```text
+prev_k_{t+1} ← (1-r_t)prev_k_{t+1},
+     r_t = delimiter_t.
 ```
 
 This zeroes the trace at statement boundaries without changing any parameter or tensor shape. It is enabled explicitly in Track 6 and discovered automatically in Track 5/7.
@@ -530,36 +534,36 @@ This zeroes the trace at statement boundaries without changing any parameter or 
 
 Engine II stores one `[H, d_head, d_head]` matrix per sample, initialized to zero, plus the previous key trace. At `t=0` no write occurs and the first read is zero. For `t>0`, the Delta-rule update is:
 
-```math
-F_t = \lambda_f \odot F_{t-1}
-+ \eta_{\text{eff},t} \odot \left(V_t - F_{t-1}K_{t-1}\right)K_{t-1}^{\top},
+```text
+F_t = λ_f ⊙ F_{t-1}
++ η_{eff,t} ⊙ (V_t - F_{t-1}K_{t-1})K_{t-1}^{T},
 ```
 
 where `λ_f = sigmoid(fast_decay_logit)` is per head. The Hebbian control uses exactly the same decay and learning-rate schedule but drops the erase term:
 
-```math
-F_t^{\text{Hebb}} = \lambda_f \odot F_{t-1}^{\text{Hebb}}
-+ \eta_{\text{eff},t} \odot V_t K_{t-1}^{\top}.
+```text
+F_t^{Hebb} = λ_f ⊙ F_{t-1}^{Hebb}
++ η_{eff,t} ⊙ V_t K_{t-1}^{T}.
 ```
 
 The read happens **after** the write:
 
-```math
-r_t^{(0)} = F_t\,q_t^{\text{read}}.
+```text
+r_t^{(0)} = F_t q_t^{read}.
 ```
 
 The write is causal and shifted: `prev_k = K_{t-1}`, not `K_t`. In a `[k_i, m_i, 0]` block it binds `k_i -> m_i`; in a `[m_i, v_i, 0]` block it binds `m_i -> v_i`. This shift is what allows a value at position `t` to be stored under the address seen at `t-1`.
 
-The Delta erase has a precise conditional identity. For an isolated unit-norm key `k`, with `λ_f=1`, `η_eff=1`, and `F_{t-1}k=v_{\text{old}}`:
+The Delta erase has a precise conditional identity. For an isolated unit-norm key `k`, with `λ_f=1`, `η_eff=1`, and `F_{t-1}k=v_{old}`:
 
-```math
-F_t k = F_{t-1}k + \left(v_{\text{new}} - F_{t-1}k\right)\left(k^{\top}k\right) = v_{\text{new}}.
+```text
+F_t k = F_{t-1}k + (v_{new} - F_{t-1}k)(k^{T}k) = v_{new}.
 ```
 
 The Hebbian control instead accumulates:
 
-```math
-F_t^{\text{Hebb}}k = v_{\text{old}} + v_{\text{new}}
+```text
+F_t^{Hebb}k = v_{old} + v_{new}
 ```
 
 under the same idealization, so a read cannot distinguish the newest value from the stale one. Real keys are not exactly orthogonal, so cross-talk exists; the V13 measurements quantify the consequence rather than assuming the idealized identity.
@@ -570,40 +574,40 @@ under the same idealization, so a read cannot distinguish the newest value from 
 
 Engine III reuses `F_t` as a latent query space. It does not create another memory or another physical layer. The initial read and accumulation are:
 
-```math
-r^{(0)} = r_t^{(0)}, \qquad r_{\text{accum}} = w_{t,0}^{\text{hop}} r^{(0)}.
+```text
+r^{(0)} = r_t^{(0)},      r_{accum} = w_{t,0}^{hop} r^{(0)}.
 ```
 
 For `i = 0, ..., L_max-1`:
 
-```math
-q^{(i+1)} = \mathrm{normalize}\left(r^{(i)} + H_i r^{(i)}\right),
+```text
+q^{(i+1)} = normalize(r^{(i)} + H_i r^{(i)}),
 ```
 
-```math
+```text
 r^{(i+1)} = F_t q^{(i+1)},
-\qquad
-r_{\text{accum}} \leftarrow r_{\text{accum}} + w_{t,i+1}^{\text{hop}} r^{(i+1)}.
+
+r_{accum} ← r_{accum} + w_{t,i+1}^{hop} r^{(i+1)}.
 ```
 
 The output is the routed accumulation:
 
-```math
-r_t^{\text{out}} = r_{\text{accum}}.
+```text
+r_t^{out} = r_{accum}.
 ```
 
 `r^{(i)}` has shape `[B, H, d_head, 1]`; `H_i` has shape `[1, H, d_head, d_head]`; normalization is L2 over `dim=-2`. With `max_loops=2`, the initial read is hop 1, the first refinement is hop 2, and the second refinement is an extra latent step; with `max_loops=3`, four edges are reachable. The loop count is fixed; the router changes weights, not depth.
 
 The readout fuses the collapse state and the routed memory:
 
-```math
-z_t = h_t + W_o \mathrm{vec}\left(r_t^{\text{out}}\right),
+```text
+z_t = h_t + W_o vec(r_t^{out}),
 ```
 
-```math
-z_t \leftarrow z_t + s_t \odot \mathrm{MLP}\left(\mathrm{LN}(z_t)\right),
-\qquad
-y_t = x_t + \mathrm{LN}(z_t).
+```text
+z_t ← z_t + s_t ⊙ MLP(LN(z_t)),
+
+y_t = x_t + LN(z_t).
 ```
 
 When `enable_adaptive_loop=False`, `r_t^out=r_t^(0)` and the refinement MLP is skipped. When `enable_fast_weight=False`, `z=h_seq` and Engine III has no memory to read.
@@ -627,13 +631,13 @@ The persistent inference state per layer is exactly three tensors. For `D=128`, 
 | `prev_k` | `[B, H, d_head, 1]` | 4 × 32 = 128 per sample | **512** | Synaptic eligibility trace |
 | **Total** | — | **4,352 floats** | **17,408** | **17.00 KiB per sample** |
 
-```math
-M_{\text{state}} = \underbrace{4D}_{h} + \underbrace{4Hd_{\text{head}}^2}_{F_{\text{mat}}} + \underbrace{4Hd_{\text{head}}}_{prev\_k}
-= 512 + 16{,}384 + 512 = 17{,}408\ \text{B}.
+```text
+M_{state} = (4D) [h] + (4Hd_{head}^2) [F_{mat}] + (4Hd_{head}) [prev_k]
+= 512 + 16,384 + 512 = 17,408 B.
 ```
 
-```math
-17{,}408\ \text{B} \div 1{,}024 = 17.00\ \text{KiB}.
+```text
+17,408 B ÷ 1,024 = 17.00 KiB.
 ```
 
 The formula is configuration-dependent; **17.00 KiB is the reference configuration**, not a universal constant for every model width. For V13's `D=64`, `H=4`, `d_head=16`, the same formula gives `256 + 4,096 + 256 = 4,608 B = 4.50 KiB` per layer. The O(1)-in-`L` property holds for both; only the constant changes. The flagship 17.00 KiB number and every 1M comparison in this document refer to the `D=128` reference configuration used in the CUDA profile.
@@ -986,8 +990,8 @@ Bedrock-TriCore is best understood as a **controlled demonstration of a design t
 
 **Bedrock（基岩）** 承诺的是**持久化推理状态**，而不是参数量、训练显存或浮点吞吐。Transformer 的解码状态是一个不断增长的键值档案：每生成一个 Token 就追加一片 K/V，因此状态大小是上下文长度的函数。Bedrock-TriCore 用每层三个定长张量取代这个档案。参考配置为 `d_model=128`、`H=4`、`d_head=32`、FP32，此时单样本完整解码状态为：
 
-```math
-M_{\text{state}} = \underbrace{128 \times 4}_{h:\ 512\ \text{B}} + \underbrace{4 \times 32 \times 32 \times 4}_{F_{\text{mat}}:\ 16{,}384\ \text{B}} + \underbrace{4 \times 32 \times 1 \times 4}_{prev\_k:\ 512\ \text{B}} = 17{,}408\ \text{B} = 17.00\ \text{KiB}.
+```text
+M_{state} = (128 × 4) [h: 512 B] + (4 × 32 × 32 × 4) [F_{mat}: 16,384 B] + (4 × 32 × 1 × 4) [prev_k: 512 B] = 17,408 B = 17.00 KiB.
 ```
 
 这个数字里没有 `L`。无论上下文是 128、32K、131K 还是 1,048,576 个 Token，它都完全相同。1M Token 的真实 CUDA 实测中，两层缓存式 Transformer 的 K/V 缓存为 2,147,483,648 字节（2.00 GiB），Bedrock-TriCore 为 17,408 字节，持久状态缩小 **123,361.9 倍**；1M 解码延迟为 Transformer **274.275 ms/token**、TriCore **3.794 ms/token**，单 Token 快 **72.30 倍**。所谓“基岩不可摧毁”，指的是地基不随上下文高度增长。
@@ -1049,32 +1053,32 @@ Hebbian 矩阵只有一个全局衰减，却要同时满足两个互斥要求。
 
 标准因果自注意力让每个位置与之前所有位置比较，训练激活成本随 `O(L²)` 增长，推理缓存随 `O(L)` 增长。对于 `n_layers` 层、`n_heads` 个头、每头宽度 `d_head`、FP32 存储的解码器，传统 K/V 缓存为：
 
-```math
-M_{\text{KV}}(L) = 2 \times n_{\text{layers}} \times L \times n_{\text{heads}} \times d_{\text{head}} \times 4\ \text{bytes}.
+```text
+M_{KV}(L) = 2 × n_{layers} × L × n_{heads} × d_{head} × 4 bytes.
 ```
 
 取 `n_layers=2`、`n_heads=4`、`d_head=32`（即 `d_model=128`）：
 
-```math
-M_{\text{KV}}(1{,}048{,}576) = 2 \times 2 \times 1{,}048{,}576 \times 4 \times 32 \times 4 = 2{,}147{,}483{,}648\ \text{B} = 2.00\ \text{GiB}.
+```text
+M_{KV}(1,048,576) = 2 × 2 × 1,048,576 × 4 × 32 × 4 = 2,147,483,648 B = 2.00 GiB.
 ```
 
 Bedrock-TriCore 的状态与 `L` 无关：
 
-```math
-M_{\text{TriCore}} = (D + H d_{\text{head}}^2 + H d_{\text{head}}) \times 4 = (128 + 4 \times 32^2 + 4 \times 32) \times 4 = 17{,}408\ \text{B}.
+```text
+M_{TriCore} = (D + H d_{head}^2 + H d_{head}) × 4 = (128 + 4 × 32^2 + 4 × 32) × 4 = 17,408 B.
 ```
 
 实测比值为：
 
-```math
-\frac{M_{\text{KV}}(1{,}048{,}576)}{M_{\text{TriCore}}} = \frac{2{,}147{,}483{,}648}{17{,}408} = 123{,}361.9\times.
+```text
+(M_{KV}(1,048,576))/(M_{TriCore}) = (2,147,483,648)/(17,408) = 123,361.9×.
 ```
 
 当缓存大到足以主导内存带宽时，延迟也呈现同一趋势。128 Token 时，小缓存 Transformer 更快（`1.277` 对 `2.596 ms/token`）；实测交叉点在 `L=8,192`（`3.339` 对 `3.151 ms/token`）。到 1M 时 Transformer 为 **274.275 ms/token**，TriCore 仍为 **3.794 ms/token**：
 
-```math
-\frac{274.275}{3.794} = 72.30\times.
+```text
+(274.275)/(3.794) = 72.30×.
 ```
 
 **协议诚实性。** 这些数字来自单张 RTX 3060、batch=1、FP32 的真实 `torch.cuda.memory_allocated()` 差值（`empty_cache()` 之后）与真实缓存解码计时。Transformer 基线确实分配、写入并对完整因果 K/V 缓存做注意力，而不是按公式估算。65K 以下计时/预热步数为 32/8，65K–131K 为 16/4，262K–1M 为 8/2。这不是服务吞吐，不是多 batch 吞吐，也不代表 TriCore 训练更便宜。
@@ -1101,14 +1105,14 @@ M_{\text{TriCore}} = (D + H d_{\text{head}}^2 + H d_{\text{head}}) \times 4 = (1
 
 线性循环记忆可以写成外积累加器。最朴素的 Hebbian 形式，逐头学习率 `η`、衰减 `λ`：
 
-```math
-F_t = \lambda F_{t-1} + \eta\, V_t K_{t-1}^{\top}.
+```text
+F_t = λ F_{t-1} + η V_t K_{t-1}^{T}.
 ```
 
 在查询键 `k` 上读取 `F_t k`。若同一个键被写入四次 `v^{(1)},...,v^{(4)}` 且不衰减（`λ=1`），读取结果是叠加：
 
-```math
-F_t k = \eta \sum_{r=1}^{4} v^{(r)} + \text{crosstalk}.
+```text
+F_t k = η ∑_{r=1}^{4} v^{(r)} + crosstalk.
 ```
 
 写入最新值并不会移除旧值。降低 `λ` 最终能压小旧贡献，但它也同时衰减**所有**早期绑定，包括从未被覆写的静态变量。这就是衰减—干扰两难：
@@ -1122,14 +1126,14 @@ F_t k = \eta \sum_{r=1}^{4} v^{(r)} + \text{crosstalk}.
 
 Delta 规则在快速权重更新中加入预测误差项：
 
-```math
-F_t = \lambda_f F_{t-1} + \eta_{\text{eff},t}\left(V_t - F_{t-1}K_{t-1}\right)K_{t-1}^{\top}.
+```text
+F_t = λ_f F_{t-1} + η_{eff,t}(V_t - F_{t-1}K_{t-1})K_{t-1}^{T}.
 ```
 
-对于孤立的单位范数键 `k`，取 `λ_f=1`、`η_eff=1`、`F_{t-1}k=v_{\text{old}}`，新读取恰好是新值：
+对于孤立的单位范数键 `k`，取 `λ_f=1`、`η_eff=1`、`F_{t-1}k=v_{old}`，新读取恰好是新值：
 
-```math
-F_t k = v_{\text{old}} + (v_{\text{new}} - v_{\text{old}})(k^{\top}k) = v_{\text{new}}.
+```text
+F_t k = v_{old} + (v_{new} - v_{old})(k^{T}k) = v_{new}.
 ```
 
 这是全局衰减无法表达的定点擦除。V13 的提升集中在 hot 与 stale 两列，也正因如此：Delta 不是“忘得更快”，而是在写入替换值之前减掉被寻址的旧值。
@@ -1151,10 +1155,10 @@ V13 三 seed、400 步实测：
 
 Engine I 提供另一半机制。其突触资格迹就是冻结的前一个键，迹条件读取为：
 
-```math
-q_t^{\text{read}} = \mathrm{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right),
-\qquad
-\text{prev\_k}_{t+1} = \mathrm{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right).
+```text
+q_t^{read} = normalize(e_t q_t + (1-e_t) prev_k_t),
+
+prev_k_{t+1} = normalize((1-e_t) prev_k_t + e_t K_t).
 ```
 
 当中缀连接符处资格门关闭（`e_t ≈ 0`）时，读取解引用前一个实体，且 `prev_k` 不前进。于是下一个 Token 的值被写入该实体键，形成移位绑定 `F(alias)=var`。若迹的方向错误，两跳解引用就没有地址可循。V13 Fair No-Engine-I 保留 Delta 与可学习写路径，只关闭惊讶门，总体跌到 **37.89%**，说明没有稳定地址时，单靠擦除并不够。
@@ -1165,8 +1169,8 @@ q_t^{\text{read}} = \mathrm{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\
 
 给定固定预算 `L_max`，初始读取是第 1 跳，每次细化再走一跳。物理深度仍为一层；循环次数是计算预算，路由器学习如何给每一跳加权。Track 6 将四层事实乱序放置，中间隔 12 个对抗干扰 Token。单层 Full 使用 `max_loops=3`，达到 **100.00% 域内 / 100.00% 四倍间隔外推**，查询位置路由权重为：
 
-```math
-w^{\text{hop}} = [0.005,\ 0.004,\ 0.003,\ 0.988].
+```text
+w^{hop} = [0.005, 0.004, 0.003, 0.988].
 ```
 
 路由器把 **98.8%** 的查询质量放在第 4 跳。两个更浅的预算并不是“部分解决”，而是塌缩到最后一个可用槽位，仍处于随机水平：
@@ -1329,56 +1333,56 @@ Track 7 是定义本次发布的实验。协议：seeds `42/100/2026`、**400 �
 
 每个 Token 先归一化，再做投影：
 
-```math
-u_t = \mathrm{LN}(x_t), \qquad \tilde{u}_t = \mathrm{SiLU}(W_u u_t + b_u).
+```text
+u_t = LN(x_t),      ũ_t = SiLU(W_u u_t + b_u).
 ```
 
 共享地址投影并归一化：
 
-```math
-a_t = \mathrm{normalize}(W_a u_t) \in \mathbb{R}^{H \times d_{\text{head}}}.
+```text
+a_t = normalize(W_a u_t) ∈ ℝ^{H × d_{head}}.
 ```
 
 `Q`、`K`、`V` 都是共享地址的残差扰动，固定残差尺度为 `0.15`：
 
-```math
-Q_t = \mathrm{normalize}\left(a_t + 0.15\,W_q u_t\right),
+```text
+Q_t = normalize(a_t + 0.15 W_q u_t),
 ```
 
-```math
-K_t = \mathrm{normalize}\left(a_t + 0.15\,W_k u_t\right),
+```text
+K_t = normalize(a_t + 0.15 W_k u_t),
 ```
 
-```math
-V_t = a_t + 0.15\,W_v u_t.
+```text
+V_t = a_t + 0.15 W_v u_t.
 ```
 
 跳路由器对“初始读取 + `L_max` 次细化”做 softmax：
 
-```math
-w_t^{\text{hop}} = \mathrm{softmax}(W_r u_t) \in \mathbb{R}^{L_{\max}+1}.
+```text
+w_t^{hop} = softmax(W_r u_t) ∈ ℝ^{L_{max}+1}.
 ```
 
 这里没有位置嵌入，也没有对序列位置的注意力。唯一按位置做 softmax 的是跳路由器，其支撑集是固定跳数预算而非 `L`。共享归一化地址是“检索出的桥接值可直接作为下一次查询”的关键：写入某地址的值，会在同一度量空间中被读回。
 
 **零先验角色发现。** 当 `autonomous_syntax=True` 且所有 Token 角色参数为 `None` 时，模型只计算序列内出现次数：
 
-```math
-f_t = \sum_{u=1}^{L} \mathbf{1}\left[x_t = x_u\right].
+```text
+f_t = ∑_{u=1}^{L} 1[x_t = x_u].
 ```
 
 然后定义：
 
-```math
-\text{structural}_t = \mathbf{1}\left[f_t \ge \max(6,\ \lfloor L/10 \rfloor)\right],
+```text
+structural_t = 1[f_t ≥ max(6, ⌊ L/10 ⌋)],
 ```
 
-```math
-\text{delimiter}_t = \text{structural}_t \wedge \mathbf{1}\left[x_t = x_L\right],
+```text
+delimiter_t = structural_t ∧ 1[x_t = x_L],
 ```
 
-```math
-\text{infix}_t = \text{structural}_t \wedge \neg\text{delimiter}_t \wedge \mathbf{1}\left[f_{t-1} \le F_{\max}\right].
+```text
+infix_t = structural_t ∧ ¬delimiter_t ∧ 1[f_{t-1} ≤ F_{max}].
 ```
 
 `F_max` 即 `autonomous_entity_max_freq`：默认 **4**（V12），V13 为 **6**，因为一个热变量的“一次 LET + 四次 SET + 一次 NOP”共出现六次。`write_sep_mask = structural`；`elig_sep_mask = infix`；`reset_mask = delimiter`。掩码不增加参数，也不增加循环状态。对短封闭语法序列，发现复杂度为 `O(B L²)` 次 Token 相等比较；1M 剖面禁用该路径，单 Token 流式 API 也没有序列频率上下文。由于只依赖相等计数，对词表 ID 做任意置换，所有掩码逐位不变。
@@ -1387,71 +1391,71 @@ f_t = \sum_{u=1}^{L} \mathbf{1}\left[x_t = x_u\right].
 
 Engine I 有两个状态效应。第一个是逐维坍缩状态 `h_t`，初始为零。预测误差是变换后输入与上一坍缩状态的绝对差：
 
-```math
-e_t^{\text{surp}} = \left|\tilde{u}_t - h_{t-1}\right|,
-\qquad
-g_t = \sigma\left(W_s u_t + e_t^{\text{surp}}\right).
+```text
+e_t^{surp} = |ũ_t - h_{t-1}|,
+
+g_t = σ(W_s u_t + e_t^{surp}).
 ```
 
 标量惊讶是门激活的均值：
 
-```math
-s_t = \frac{1}{D}\sum_{j=1}^{D} g_{t,j}.
+```text
+s_t = (1)/(D)∑_{j=1}^{D} g_{t,j}.
 ```
 
 坍缩更新使用逐维学习衰减 `λ = sigmoid(base_decay_logit)` 与惊讶门：
 
-```math
-h_t = \lambda \odot \left(1 - 0.5\,g_t\right) \odot h_{t-1} + g_t \odot \tilde{u}_t.
+```text
+h_t = λ ⊙ (1 - 0.5 g_t) ⊙ h_{t-1} + g_t ⊙ ũ_t.
 ```
 
 第二个效应是写保护。逐头写 logit 与一条短 Token-to-gate 路径、以及发现的结构掩码组合：
 
-```math
-\ell_t^{w} = W_w u_t + 8\,G_w(u_t) - 8\,\text{structural}_t,
+```text
+ℓ_t^{w} = W_w u_t + 8 G_w(u_t) - 8 structural_t,
 ```
 
-```math
-\omega_t = \sigma\left(\ell_t^{w} + s_t - 0.5\right).
+```text
+ω_t = σ(ℓ_t^{w} + s_t - 0.5).
 ```
 
 有效快速权重学习率只被衰减，绝不会被放大：
 
-```math
-\eta_{\text{eff},t} = \eta \odot \omega_t,
-\qquad
-\eta = \mathrm{sigmoid}(\text{fast\_lr\_logit}).
+```text
+η_{eff,t} = η ⊙ ω_t,
+
+η = sigmoid(fast_lr_logit).
 ```
 
 这就是 `enable_surprise_gate=False` 是**公平**消融的原因：它移除可学习写路径与惊讶调制，但不改变参数形状。该模式下实现取 `g_t=0.5`、`s_t=0.5`、`η_eff=1.0`、`decay=1.0`，且不应用学习写门。
 
 第三个效应是突触资格迹。资格门由并行的逐头 logit 产生，并在中缀连接符处关闭：
 
-```math
-\ell_t^{e} = W_e u_t + 8\,G_e(u_t) - 8\,\text{infix}_t,
+```text
+ℓ_t^{e} = W_e u_t + 8 G_e(u_t) - 8 infix_t,
 ```
 
-```math
-e_t = \sigma\left(\ell_t^{e} + s_t - 0.5\right).
+```text
+e_t = σ(ℓ_t^{e} + s_t - 0.5).
 ```
 
 与写门不同，资格门**不**衰减快速权重写入，它控制“寻址哪个键”。迹条件查询与下一迹为：
 
-```math
-q_t^{\text{read}} = \mathrm{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\right),
+```text
+q_t^{read} = normalize(e_t q_t + (1-e_t) prev_k_t),
 ```
 
-```math
-\text{prev\_k}_{t+1} = \mathrm{normalize}\left((1-e_t)\,\text{prev\_k}_t + e_t K_t\right).
+```text
+prev_k_{t+1} = normalize((1-e_t) prev_k_t + e_t K_t).
 ```
 
 当中缀连接符处门关闭（`e_t ≈ 0`），读取解引用冻结的前一个实体，`prev_k` 不前进；下一个 Token 的值就写入该实体键。这就是移位绑定 `F(alias)=var`，也是 `alias -> var -> lit` 能成立的方向。若采用“在 EQ 处打开”的约定，就会写 `F(EQ)=var`，无法支持该链。
 
 分隔符重置在迹更新之后执行：
 
-```math
-\text{prev\_k}_{t+1} \leftarrow \left(1-r_t\right)\text{prev\_k}_{t+1},
-\qquad r_t = \text{delimiter}_t.
+```text
+prev_k_{t+1} ← (1-r_t)prev_k_{t+1},
+     r_t = delimiter_t.
 ```
 
 它在语句边界清零迹，不改变任何参数或张量形状。Track 6 显式启用，Track 5/7 自动发现。
@@ -1460,36 +1464,36 @@ q_t^{\text{read}} = \mathrm{normalize}\left(e_t q_t + (1-e_t)\,\text{prev\_k}_t\
 
 Engine II 为每个样本存一个 `[H, d_head, d_head]` 矩阵（初始为零）以及前一个键迹。`t=0` 不写入，首次读取为零。对 `t>0`，Delta 更新为：
 
-```math
-F_t = \lambda_f \odot F_{t-1}
-+ \eta_{\text{eff},t} \odot \left(V_t - F_{t-1}K_{t-1}\right)K_{t-1}^{\top},
+```text
+F_t = λ_f ⊙ F_{t-1}
++ η_{eff,t} ⊙ (V_t - F_{t-1}K_{t-1})K_{t-1}^{T},
 ```
 
 其中 `λ_f = sigmoid(fast_decay_logit)` 逐头独立。Hebbian 对照使用完全相同的衰减与学习率调度，但去掉擦除项：
 
-```math
-F_t^{\text{Hebb}} = \lambda_f \odot F_{t-1}^{\text{Hebb}}
-+ \eta_{\text{eff},t} \odot V_t K_{t-1}^{\top}.
+```text
+F_t^{Hebb} = λ_f ⊙ F_{t-1}^{Hebb}
++ η_{eff,t} ⊙ V_t K_{t-1}^{T}.
 ```
 
 读取发生在写入**之后**：
 
-```math
-r_t^{(0)} = F_t\,q_t^{\text{read}}.
+```text
+r_t^{(0)} = F_t q_t^{read}.
 ```
 
 写入是因果移位的：使用 `prev_k = K_{t-1}`，不是 `K_t`。在 `[k_i, m_i, 0]` 块中绑定 `k_i -> m_i`；在 `[m_i, v_i, 0]` 块中绑定 `m_i -> v_i`。这个移位让位置 `t` 的值被写到位置 `t-1` 所见地址之下。
 
-Delta 擦除有一个精确的条件恒等式。对孤立的单位范数键 `k`，取 `λ_f=1`、`η_eff=1`、`F_{t-1}k=v_{\text{old}}`：
+Delta 擦除有一个精确的条件恒等式。对孤立的单位范数键 `k`，取 `λ_f=1`、`η_eff=1`、`F_{t-1}k=v_{old}`：
 
-```math
-F_t k = F_{t-1}k + \left(v_{\text{new}} - F_{t-1}k\right)\left(k^{\top}k\right) = v_{\text{new}}.
+```text
+F_t k = F_{t-1}k + (v_{new} - F_{t-1}k)(k^{T}k) = v_{new}.
 ```
 
 同样理想化下，Hebbian 对照会累加：
 
-```math
-F_t^{\text{Hebb}}k = v_{\text{old}} + v_{\text{new}},
+```text
+F_t^{Hebb}k = v_{old} + v_{new},
 ```
 
 因此读取无法区分最新值与陈旧值。真实键并不严格正交，会存在串扰；V13 用实测结果量化后果，而不是把理想恒等式当成现实。
@@ -1500,40 +1504,40 @@ F_t^{\text{Hebb}}k = v_{\text{old}} + v_{\text{new}},
 
 Engine III 复用 `F_t` 作为隐查询空间，不创建第二份记忆，也不增加物理层。初始读取与累加为：
 
-```math
-r^{(0)} = r_t^{(0)}, \qquad r_{\text{accum}} = w_{t,0}^{\text{hop}} r^{(0)}.
+```text
+r^{(0)} = r_t^{(0)},      r_{accum} = w_{t,0}^{hop} r^{(0)}.
 ```
 
 对 `i = 0, ..., L_max-1`：
 
-```math
-q^{(i+1)} = \mathrm{normalize}\left(r^{(i)} + H_i r^{(i)}\right),
+```text
+q^{(i+1)} = normalize(r^{(i)} + H_i r^{(i)}),
 ```
 
-```math
+```text
 r^{(i+1)} = F_t q^{(i+1)},
-\qquad
-r_{\text{accum}} \leftarrow r_{\text{accum}} + w_{t,i+1}^{\text{hop}} r^{(i+1)}.
+
+r_{accum} ← r_{accum} + w_{t,i+1}^{hop} r^{(i+1)}.
 ```
 
 输出为路由累加：
 
-```math
-r_t^{\text{out}} = r_{\text{accum}}.
+```text
+r_t^{out} = r_{accum}.
 ```
 
 `r^{(i)}` 形状为 `[B, H, d_head, 1]`；`H_i` 形状为 `[1, H, d_head, d_head]`；归一化沿 `dim=-2` 做 L2。`max_loops=2` 时，初始读取是第 1 跳，第一次细化是第 2 跳，第二次细化是额外隐步；`max_loops=3` 时可到达四条边。循环次数固定；路由器改变权重，不改变深度。
 
 读出融合坍缩状态与路由记忆：
 
-```math
-z_t = h_t + W_o \mathrm{vec}\left(r_t^{\text{out}}\right),
+```text
+z_t = h_t + W_o vec(r_t^{out}),
 ```
 
-```math
-z_t \leftarrow z_t + s_t \odot \mathrm{MLP}\left(\mathrm{LN}(z_t)\right),
-\qquad
-y_t = x_t + \mathrm{LN}(z_t).
+```text
+z_t ← z_t + s_t ⊙ MLP(LN(z_t)),
+
+y_t = x_t + LN(z_t).
 ```
 
 当 `enable_adaptive_loop=False` 时，`r_t^out=r_t^(0)`，且跳过细化 MLP。当 `enable_fast_weight=False` 时，`z=h_seq`，Engine III 无记忆可读。
@@ -1557,13 +1561,13 @@ y_t = x_t + \mathrm{LN}(z_t).
 | `prev_k` | `[B, H, d_head, 1]` | 每样本 4 × 32 = 128 | **512** | 突触资格迹 |
 | **总计** | — | **4,352 个 float** | **17,408** | **17.00 KiB / 样本** |
 
-```math
-M_{\text{state}} = \underbrace{4D}_{h} + \underbrace{4Hd_{\text{head}}^2}_{F_{\text{mat}}} + \underbrace{4Hd_{\text{head}}}_{prev\_k}
-= 512 + 16{,}384 + 512 = 17{,}408\ \text{B}.
+```text
+M_{state} = (4D) [h] + (4Hd_{head}^2) [F_{mat}] + (4Hd_{head}) [prev_k]
+= 512 + 16,384 + 512 = 17,408 B.
 ```
 
-```math
-17{,}408\ \text{B} \div 1{,}024 = 17.00\ \text{KiB}.
+```text
+17,408 B ÷ 1,024 = 17.00 KiB.
 ```
 
 公式随配置变化；**17.00 KiB 是参考配置的数值**，不是任意模型宽度的普适常数。对 V13 的 `D=64`、`H=4`、`d_head=16`，同一公式给出 `256 + 4,096 + 256 = 4,608 B = 4.50 KiB` 每层。两者都保持对 `L` 的 O(1)，只是常数不同。本文所有 17.00 KiB 旗舰数字与 1M 对比，均指 CUDA 剖面使用的 `D=128` 参考配置。
@@ -2150,22 +2154,22 @@ TriCore is a residual sequence block with three independently ablatable engines.
 
 ### 2.1 Causal input path
 
-```math
-u_t = \mathrm{LN}(x_t), \qquad \tilde{u}_t = \mathrm{SiLU}(W_u u_t + b_u)
+```text
+u_t = LN(x_t),      ũ_t = SiLU(W_u u_t + b_u)
 ```
 
-```math
-a_t = \mathrm{normalize}(W_a u_t)
+```text
+a_t = normalize(W_a u_t)
 ```
 
-```math
-Q_t = \mathrm{normalize}(a_t + 0.15 W_q u_t), \quad
-K_t = \mathrm{normalize}(a_t + 0.15 W_k u_t), \quad
+```text
+Q_t = normalize(a_t + 0.15 W_q u_t),
+K_t = normalize(a_t + 0.15 W_k u_t),
 V_t = a_t + 0.15 W_v u_t
 ```
 
-```math
-w_t^{\text{hop}} = \mathrm{softmax}(W_r u_t)
+```text
+w_t^{hop} = softmax(W_r u_t)
 ```
 
 `Q/K/V` have shape `[B, L, H, d_head]`; the hop router has shape `[B, L, L_max+1]`. All L2 normalization is over the head dimension. The shared normalized address `a_t` keeps a retrieved bridge compatible with the next query.
@@ -2174,21 +2178,21 @@ w_t^{\text{hop}} = \mathrm{softmax}(W_r u_t)
 
 Initial state: `h_0 = 0`, shape `[B, D]`.
 
-```math
-e_t = |\tilde{u}_t - h_{t-1}|, \qquad g_t = \sigma(W_s u_t + e_t)
+```text
+e_t = |ũ_t - h_{t-1}|,      g_t = σ(W_s u_t + e_t)
 ```
 
-```math
-s_t = \frac{1}{D}\sum_j g_{t,j}, \qquad
-\omega_t = \sigma(W_g u_t + s_t - 0.5)
+```text
+s_t = (1)/(D)∑_j g_{t,j},
+ω_t = σ(W_g u_t + s_t - 0.5)
 ```
 
-```math
-\eta_{\text{eff},t} = \eta \odot \omega_t
+```text
+η_{eff,t} = η ⊙ ω_t
 ```
 
-```math
-h_t = \lambda \odot (1 - 0.5 g_t) \odot h_{t-1} + g_t \odot \tilde{u}_t
+```text
+h_t = λ ⊙ (1 - 0.5 g_t) ⊙ h_{t-1} + g_t ⊙ ũ_t
 ```
 
 `lambda` is `sigmoid(base_decay_logit)` with shape `[D]`; `eta` is `sigmoid(fast_lr_logit)` with shape `[1, H, 1, 1]`. The write gate is per head and shared across that head's matrix. When `enable_surprise_gate=False`, the block uses `g_t=0.5`, `s_t=0.5`, `eta_eff=1.0`, `decay=1.0`, and no learned write gate.
@@ -2199,14 +2203,14 @@ Initial state: `F_0 = 0`, shape `[B, H, d_head, d_head]`; `prev_k = 0`, shape `[
 
 For `t > 0`:
 
-```math
-F_t = \lambda_f \odot F_{t-1}
-+ \eta_{\text{eff},t} \odot (V_t - F_{t-1}K_{t-1})K_{t-1}^{\top}
+```text
+F_t = λ_f ⊙ F_{t-1}
++ η_{eff,t} ⊙ (V_t - F_{t-1}K_{t-1})K_{t-1}^{T}
 ```
 
 The read happens after the write:
 
-```math
+```text
 r_t^{(0)} = F_t Q_t
 ```
 
@@ -2214,32 +2218,32 @@ At `t=0`, no write occurs and the first read is zero. At the end of each step, `
 
 ### 2.4 Engine III — latent multi-hop synaptic equilibrium loop
 
-```math
-r^{(0)} = r_t^{(0)}, \qquad r_{\text{accum}} = w_{t,0}^{\text{hop}} r^{(0)}
+```text
+r^{(0)} = r_t^{(0)},      r_{accum} = w_{t,0}^{hop} r^{(0)}
 ```
 
 For `i = 0, \ldots, L_{\max}-1`:
 
-```math
-q^{(i+1)} = \mathrm{normalize}\left(r^{(i)} + H_i r^{(i)}\right)
+```text
+q^{(i+1)} = normalize(r^{(i)} + H_i r^{(i)})
 ```
 
-```math
-r^{(i+1)} = F_t q^{(i+1)}, \qquad
-r_{\text{accum}} \leftarrow r_{\text{accum}} + w_{t,i+1}^{\text{hop}} r^{(i+1)}
+```text
+r^{(i+1)} = F_t q^{(i+1)},
+r_{accum} ← r_{accum} + w_{t,i+1}^{hop} r^{(i+1)}
 ```
 
 `r^(i)` is `[B, H, d_head, 1]`; `H_i` is `[1, H, d_head, d_head]`; normalization is L2 over `dim=-2`. With `max_loops=2`, the initial read is hop 1, the first re-query is hop 2, and the second re-query is an extra latent refinement. The loop count is fixed; the router changes weights, not depth.
 
 ### 2.5 Readout
 
-```math
-z_t = h_t + W_o \mathrm{vec}(r_t^{\text{out}})
+```text
+z_t = h_t + W_o vec(r_t^{out})
 ```
 
-```math
-z_t \leftarrow z_t + s_t \odot \mathrm{MLP}(\mathrm{LN}(z_t)), \qquad
-y_t = x_t + \mathrm{LN}(z_t)
+```text
+z_t ← z_t + s_t ⊙ MLP(LN(z_t)),
+y_t = x_t + LN(z_t)
 ```
 
 When `enable_adaptive_loop=False`, `r_t^out = r_t^(0)` and the refinement MLP is skipped. When `enable_fast_weight=False`, Engine II is skipped, `z=h_seq`, and Engine III has no memory to read. All modules are constructed regardless of flags, so all TriCore variants report the same parameter count.
