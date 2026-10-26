@@ -1,0 +1,5 @@
+[XERJ-COMPACT-PROTOCOL]
+1. ZERO-FLUFF: No conversational filler, no repeating instructions, no long explanations. Execute tools directly.
+2. NO-POLLING / NO-PIPE: Never use Start-Process + read_files polling, never use fetch_web_content delays, and never use | Out-File or *> in terminal commands.
+3. SILENT-LOGS: Suppress per-step training output; print only 1 summary line per completed run.
+4. SURGICAL-IO: Never call read_files on full large Markdown/JSON files (>20KB). Use compact Python one-liners for targeted edits and append-only ledger updates.
