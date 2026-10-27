@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>Bedrock-TriCore (<code>bedrock-tricore</code> v1.6.2)</h1>
+  <h1>Bedrock-TriCore (<code>bedrock-tricore</code> v1.6.3)</h1>
   <h3><i>An Attention-Free, Constant-State O(1) Sequence Operator with Causal Delta-Rule Fast Weights and Latent Multi-Hop Chaining</i></h3>
   <p><b>恒定状态 O(1) 无注意力序列算子：因果 Delta 规则快权重、突触资格迹与隐空间多跳循环</b></p>
 
@@ -18,7 +18,7 @@
   <a href="https://pytorch.org/docs/stable/jit.html"><img alt="TorchScript JIT fused" src="https://img.shields.io/badge/TorchScript-JIT%20Fused-EE4C2C?logo=pytorch&logoColor=white"></a>
   <img alt="O(1) state 17.00 KiB" src="https://img.shields.io/badge/O(1)%20State-17.00%20KiB-0B8457">
   <img alt="1M CUDA scaling 123,361.9x" src="https://img.shields.io/badge/1M%20CUDA-123%2C361.9%C3%97-6C3483">
-  <a href="#8-verification"><img alt="Tests 11/11 passing" src="https://img.shields.io/badge/Tests-11%2F11%20Passing-brightgreen"></a>
+  <a href="#8-verification"><img alt="Tests 12/12 passing" src="https://img.shields.io/badge/Tests-12%2F12%20Passing-brightgreen"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-green"></a>
 </p>
 
@@ -30,9 +30,9 @@
 >
 > **公式渲染。** 八组核心公式以 300 DPI Computer Modern 高清 PNG 内嵌自本仓库，确保 GitHub 与 PyPI 渲染完全一致；PyPI 不支持 LaTeX 或 MathJax。其余公式均以纯 Unicode 文本书写。
 
-> **Release 1.6.2.** Rendering-only patch: the eight core architecture equation sets now ship as 300-DPI Computer Modern PNGs under `results/equations/`, embedded identically in Part I and Part II, with every remaining formula written in plain Unicode. No model, API, benchmark, or numerical result changed.
+> **Release 1.6.3.** Adds native O(1)-state `TriCoreLM.generate()` autoregressive decoding, `TriCoreLM.inspect_telemetry()` synaptic probes, and a 220-DPI vector architecture blueprint. No benchmark result changed; V4–V13 historical records remain intact.
 >
-> **1.6.2 发布说明。** 仅渲染修正：八组核心架构公式已渲染为 300 DPI Computer Modern 高清 PNG（`results/equations/`），并在 Part I 与 Part II 中一致内嵌；其余公式全部改用纯 Unicode。模型、API、基准与数值结果均未改变。
+> **1.6.3 发布说明。** 新增原生 O(1) 状态 `TriCoreLM.generate()` 自回归生成、`TriCoreLM.inspect_telemetry()` 突触遥测探针，以及 220 DPI 矢量架构蓝图；基准结果未改变，V4–V13 历史记录完整保留。
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/tricore_vs_transformer.png" alt="Bedrock-TriCore V13 six-panel panorama: mutation accuracy, static/hot retention, stale confusion, 1M-token memory, decode latency, and multi-hop depth" width="100%">
@@ -44,7 +44,7 @@
 
 ## Part I: English Flagship Specification
 
-> **Reading contract.** Part I is the current, self-contained technical specification for `bedrock-tricore` v1.6.2. Part II is its full Chinese counterpart. Part III is an append-only archive: every V4–V13 release note, table, correction, and self-audit is preserved verbatim so that no historical claim is silently rewritten. Where an older section and this specification disagree, the newer measured result and its stated scope govern.
+> **Reading contract.** Part I is the current, self-contained technical specification for `bedrock-tricore` v1.6.3. Part II is its full Chinese counterpart. Part III is an append-only archive: every V4–V13 release note, table, correction, and self-audit is preserved verbatim so that no historical claim is silently rewritten. Where an older section and this specification disagree, the newer measured result and its stated scope govern.
 
 ### Contents of Part I
 
@@ -460,56 +460,7 @@ The formula is configuration-dependent; **17.00 KiB is the reference configurati
 
 #### 5.1 End-to-end dataflow
 
-```text
-                         ┌──────────────────────────────────────────────┐
-                         │  token IDs x_t  (B, L), no position embedding │
-                         └──────────────────────┬───────────────────────┘
-                                                │
-                                  LayerNorm + SiLU projection
-                                                │
-              ┌─────────────────────────────────┼─────────────────────────────────┐
-              │                                 │                                 │
-              ▼                                 ▼                                 ▼
-   ┌────────────────────┐          ┌──────────────────────┐          ┌────────────────────┐
-   │ ENGINE I           │          │ CANONICAL ADDRESSING │          │ HOP ROUTER         │
-   │ surprise e_t       │          │ a_t = normalize(W_a) │          │ softmax over       │
-   │ g_t = σ(W_s + e_t) │          │ Q/K/V around a_t     │          │ L_max + 1 slots    │
-   │ s_t = mean(g_t)    │          └──────────┬───────────┘          └─────────┬──────────┘
-   │ h_t collapse       │                     │                              │
-   │ write gate ω_t     │                     ▼                              │
-   │ eligibility e_t    │          ┌──────────────────────┐                    │
-   └─────────┬──────────┘          │ ENGINE II            │                    │
-             │                     │ F_t = λ Fₜ₋₁         │                    │
-             │                     │   + η_eff (V_t -     │                    │
-             │                     │   Fₜ₋₁Kₜ₋₁)          │                    │
-             │                     │   Kₜ₋₁ᵀ              │                    │
-             │                     │ read q_t^read        │                    │
-             │                     └──────────┬───────────┘                    │
-             │                                │                                │
-             │                                ▼                                │
-             │                     ┌──────────────────────┐                    │
-             │                     │ ENGINE III           │◄───────────────────┘
-             │                     │ r^(0) = F_t q^read   │
-             │                     │ repeat max_loops:    │
-             │                     │   q^(i+1)=norm(      │
-             │                     │     r^(i)+H_i r^(i)) │
-             │                     │   r^(i+1)=F_t q^(i+1)│
-             │                     │ route + accumulate   │
-             │                     └──────────┬───────────┘
-             │                                │
-             ▼                                ▼
-        ┌─────────────────────────────────────────────┐
-        │ READOUT: z_t = h_t + W_o vec(r_out)          │
-        │          z_t += s_t ⊙ MLP(LN(z_t))           │
-        │          y_t = x_t + LN(z_t)                 │
-        └──────────────────────┬──────────────────────┘
-                               │
-                               ▼
-                 logits (B, L, vocab) + surprise trace
-                               │
-                               ▼
-        persistent state (only): h [B,D], F_mat [B,H,dh,dh], prev_k [B,H,dh,1]
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/tricore_architecture_blueprint.png" width="98%" alt="Bedrock-TriCore System Dataflow Blueprint"/></p>
 
 Training and streaming share the same equations but use different execution paths:
 
@@ -550,6 +501,7 @@ bedrock-tricore/
 │   ├── V11_METRICS.json         # Track 5/6/4B + Welch tests
 │   ├── V13_METRICS.json         # V13 definitive four-arm × three-seed metrics
 │   ├── equations/               # eight core architecture equation PNG boards
+│   ├── tricore_architecture_blueprint.png  # 220-DPI system dataflow blueprint
 │   ├── tricore_v11_masterpiece.png
 │   ├── tricore_v12_apex.png
 │   ├── tricore_v13_definitive.png
@@ -564,7 +516,7 @@ bedrock-tricore/
 ├── run_v13_definitive.py        # V13 resumable Delta/Hebbian/Fair/Transformer
 ├── demo_showcase.py             # one-command streaming demo, no checkpoint
 ├── requirements.txt             # torch, numpy, matplotlib
-├── pyproject.toml               # installable bedrock-tricore 1.6.2, MIT
+├── pyproject.toml               # installable bedrock-tricore 1.6.3, MIT
 ├── LICENSE                      # MIT
 ├── .gitignore                   # caches, venvs, checkpoints; keeps reports/PNGs
 ├── SPEC.md                      # original operator specification
@@ -573,7 +525,7 @@ bedrock-tricore/
 └── README.md                    # this bilingual flagship document
 ```
 
-The import package is `tricore`; the distribution name is `bedrock-tricore`. `pyproject.toml` declares `bedrock-tricore==1.6.2`, Python `>=3.10`, and runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`.
+The import package is `tricore`; the distribution name is `bedrock-tricore`. `pyproject.toml` declares `bedrock-tricore==1.6.3`, Python `>=3.10`, and runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`.
 
 ---
 
@@ -593,7 +545,7 @@ python -m pip install -e .
 # Runtime dependencies only
 python -m pip install -r requirements.txt
 
-# Full unit-test suite (11 tests)
+# Full unit-test suite (12 tests)
 python -m pytest -q
 ```
 
@@ -680,6 +632,21 @@ for t in range(8):
 ```
 
 ```python
+# ---- B2. Native O(1) autoregressive generation + synaptic telemetry ----
+prompt = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]], device=device)
+out_ids, telemetry = model.generate(
+    prompt, max_new_tokens=16, temperature=0.0, return_telemetry=True
+)
+# out_ids: [1, 24]
+# telemetry["persistent_state_bytes_per_sample"]: 17,408 (FP32)
+
+probe = model.inspect_telemetry(prompt)
+# probe["write_gate"]: [1, 8, 4]; probe["elig_gate"]: [1, 8, 4]
+# probe["hop_weights"]: [1, 8, 3]
+# probe["state_bytes_per_sample_fp32"]: 17,408; bf16: 8,704
+```
+
+```python
 # ---- C. Zero-prior V13 model (no token-ID role prior) ----
 v13 = TriCoreLM(
     vocab_size=64,
@@ -729,7 +696,7 @@ The task generators are intentionally small and explicit. A batch is a tensor pa
 
 `run_experiment.py` writes `results/BENCHMARK_REPORT.md` and the earlier four-panel figure. `run_v11_flagship.py` and `run_v12_apex.py` write their own metrics and figures. Generated files should never be hand-edited and then described as run output; rerun the script.
 
-Verification suite: **11 tests pass** with `python -m pytest -q`. Coverage includes:
+Verification suite: **12 tests pass** with `python -m pytest -q`. Coverage includes:
 
 1. forward/backward shapes and gradient flow;
 2. JIT scan versus explicit Python reference for all-engine, single-engine ablations, and all-disabled configurations;
@@ -783,7 +750,7 @@ Bedrock-TriCore is best understood as a **controlled demonstration of a design t
 
 ## Part II: 中文旗舰技术白皮书（完整版）
 
-> **阅读契约。** 本部分是 `bedrock-tricore` v1.6.2 当前、自洽、完整的中文技术规范，与 Part I 英文旗舰版逐章对等。Part III 是只追加、不覆盖的历史档案：V4 至 V13 的每一份发布记录、表格、修正与自我审计都原样保留，任何旧结论都不会被静默改写。若旧章节与本文冲突，以更新的实测结果及其明确声明的适用范围为准。
+> **阅读契约。** 本部分是 `bedrock-tricore` v1.6.3 当前、自洽、完整的中文技术规范，与 Part I 英文旗舰版逐章对等。Part III 是只追加、不覆盖的历史档案：V4 至 V13 的每一份发布记录、表格、修正与自我审计都原样保留，任何旧结论都不会被静默改写。若旧章节与本文冲突，以更新的实测结果及其明确声明的适用范围为准。
 
 ### 本部分目录
 
@@ -1199,56 +1166,7 @@ Engine III 复用 `F_t` 作为隐查询空间，不创建第二份记忆，也�
 
 #### 5.1 端到端数据流
 
-```text
-                         ┌──────────────────────────────────────────────┐
-                         │  Token ID x_t  (B, L)，无位置嵌入             │
-                         └──────────────────────┬───────────────────────┘
-                                                │
-                                  LayerNorm + SiLU 投影
-                                                │
-              ┌─────────────────────────────────┼─────────────────────────────────┐
-              │                                 │                                 │
-              ▼                                 ▼                                 ▼
-   ┌────────────────────┐          ┌──────────────────────┐          ┌────────────────────┐
-   │ ENGINE I           │          │ 规范寻址              │          │ 跳路由器            │
-   │ 惊讶 e_t           │          │ a_t = normalize(W_a) │          │ 对 L_max+1 槽位     │
-   │ g_t = σ(W_s + e_t) │          │ Q/K/V 围绕 a_t       │          │ 做 softmax          │
-   │ s_t = mean(g_t)    │          └──────────┬───────────┘          └─────────┬──────────┘
-   │ h_t 坍缩           │                     │                              │
-   │ 写门 ω_t           │                     ▼                              │
-   │ 资格门 e_t         │          ┌──────────────────────┐                    │
-   └─────────┬──────────┘          │ ENGINE II            │                    │
-             │                     │ F_t = λ Fₜ₋₁         │                    │
-             │                     │   + η_eff (V_t -     │                    │
-             │                     │   Fₜ₋₁Kₜ₋₁)          │                    │
-             │                     │   Kₜ₋₁ᵀ              │                    │
-             │                     │ 读取 q_t^read        │                    │
-             │                     └──────────┬───────────┘                    │
-             │                                │                                │
-             │                                ▼                                │
-             │                     ┌──────────────────────┐                    │
-             │                     │ ENGINE III           │◄───────────────────┘
-             │                     │ r^(0) = F_t q^read   │
-             │                     │ 重复 max_loops 次：  │
-             │                     │   q^(i+1)=norm(      │
-             │                     │     r^(i)+H_i r^(i)) │
-             │                     │   r^(i+1)=F_t q^(i+1)│
-             │                     │ 路由 + 累加          │
-             │                     └──────────┬───────────┘
-             │                                │
-             ▼                                ▼
-        ┌─────────────────────────────────────────────┐
-        │ 读出：z_t = h_t + W_o vec(r_out)             │
-        │       z_t += s_t ⊙ MLP(LN(z_t))              │
-        │       y_t = x_t + LN(z_t)                    │
-        └──────────────────────┬──────────────────────┘
-                               │
-                               ▼
-                 logits (B, L, vocab) + 惊讶迹
-                               │
-                               ▼
-        持久状态（仅此三项）：h [B,D]、F_mat [B,H,dh,dh]、prev_k [B,H,dh,1]
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/tricore_architecture_blueprint.png" width="98%" alt="Bedrock-TriCore System Dataflow Blueprint"/></p>
 
 训练与流式推理共享同一组方程，但执行路径不同：
 
@@ -1289,6 +1207,7 @@ bedrock-tricore/
 │   ├── V11_METRICS.json         # Track 5/6/4B + Welch 检验
 │   ├── V13_METRICS.json         # V13 四臂 × 三 seed 最终指标
 │   ├── equations/               # 八张核心架构公式 PNG
+│   ├── tricore_architecture_blueprint.png  # 220 DPI 系统数据流蓝图
 │   ├── tricore_v11_masterpiece.png
 │   ├── tricore_v12_apex.png
 │   ├── tricore_v13_definitive.png
@@ -1303,7 +1222,7 @@ bedrock-tricore/
 ├── run_v13_definitive.py        # V13 可续跑 Delta/Hebbian/Fair/Transformer
 ├── demo_showcase.py             # 一条命令的流式演示，无需 checkpoint
 ├── requirements.txt             # torch、numpy、matplotlib
-├── pyproject.toml               # 可安装 bedrock-tricore 1.6.2，MIT
+├── pyproject.toml               # 可安装 bedrock-tricore 1.6.3，MIT
 ├── LICENSE                      # MIT
 ├── .gitignore                   # 缓存、虚拟环境、checkpoint；保留报告/PNG
 ├── SPEC.md                      # 原始算子规范
@@ -1312,7 +1231,7 @@ bedrock-tricore/
 └── README.md                    # 本双语旗舰文档
 ```
 
-导入包名为 `tricore`，分发名为 `bedrock-tricore`。`pyproject.toml` 声明 `bedrock-tricore==1.6.2`、Python `>=3.10`，运行依赖 `torch>=2.0`、`numpy>=1.24`、`matplotlib>=3.7`。
+导入包名为 `tricore`，分发名为 `bedrock-tricore`。`pyproject.toml` 声明 `bedrock-tricore==1.6.3`、Python `>=3.10`，运行依赖 `torch>=2.0`、`numpy>=1.24`、`matplotlib>=3.7`。
 
 ---
 
@@ -1414,6 +1333,21 @@ for t in range(8):
 ```
 
 ```python
+# ---- B2. 原生 O(1) 自回归生成 + 突触遥测 ----
+prompt = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]], device=device)
+out_ids, telemetry = model.generate(
+    prompt, max_new_tokens=16, temperature=0.0, return_telemetry=True
+)
+# out_ids: [1, 24]
+# telemetry["persistent_state_bytes_per_sample"]: 17,408（FP32）
+
+probe = model.inspect_telemetry(prompt)
+# probe["write_gate"]: [1, 8, 4]；probe["elig_gate"]: [1, 8, 4]
+# probe["hop_weights"]: [1, 8, 3]
+# probe["state_bytes_per_sample_fp32"]: 17,408；bf16: 8,704
+```
+
+```python
 # ---- C. 零先验 V13 模型（不提供 Token-ID 角色先验） ----
 v13 = TriCoreLM(
     vocab_size=64,
@@ -1463,7 +1397,7 @@ sample_train_batch, iter_val_batches, vocab_size = load_real_python_corpus_batch
 
 `run_experiment.py` 写出 `results/BENCHMARK_REPORT.md` 与更早的四面板图。`run_v11_flagship.py` 与 `run_v12_apex.py` 各自写出指标与图。生成文件绝不应手动修改后再声称是运行结果；请重跑脚本。
 
-验证套件：`python -m pytest -q` 为 **11 项全部通过**。覆盖：
+验证套件：`python -m pytest -q` 为 **12 项全部通过**。覆盖：
 
 1. 前向/反向形状与梯度流；
 2. JIT 扫描对显式 Python 参考，覆盖全引擎、单引擎消融、全关闭；
@@ -1471,7 +1405,8 @@ sample_train_batch, iter_val_batches, vocab_size = load_real_python_corpus_batch
 4. 流式 `forward_step` 对完整 `forward` 的一致性；
 5. 多个长度上恒定的 17,408 字节状态；
 6. 三跳与真实语料梯度；
-7. 分隔符重置的流式一致性。
+7. 分隔符重置的流式一致性；
+8. v1.6.3 的 `generate()` 形状/状态与 `inspect_telemetry()` 键/形状契约。
 
 ---
 
@@ -1700,7 +1635,7 @@ variance check, not a significance test.
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![TorchScript](https://img.shields.io/badge/TorchScript-JIT%20fused-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/docs/stable/jit.html)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-11%20passing-brightgreen)](#8-verification)
+[![Tests](https://img.shields.io/badge/tests-12%20passing-brightgreen)](#8-verification)
 [![V12](https://img.shields.io/badge/V12-zero--prior%20%2B%201M%20CUDA-blue)](#v12-v150--zero-prior-autonomous-syntax-delta-rule-mutation-and-1048576-token-cuda-profiling)
 
 > **Status:** experimental research reference; **V12** adds zero-prior autonomous syntax discovery, a selectable Delta rule, stateful live-overwrite evaluation, and real CUDA profiling to `L=1,048,576`. The V10 synaptic eligibility trace remains the operator core, the V9 zero-`F_seq` training path remains intact, and all V6/V7/V8/V9/V10/V11 records are preserved. Read [Limitations](#9-limitations) before generalizing.
@@ -2285,7 +2220,7 @@ python tests/test_v7_streaming.py
 5. The V12 parity test exercises `enable_delta_rule` in both states and confirms that the Delta erase term changes the output.
 6. The V12 zero-prior discovery test verifies the exact Track 5 and Track 7 EQ/SEMI masks, then repeats the discovery after a random bijection of all 64 vocabulary IDs and requires bit-identical masks.
 
-The suite currently reports **11 passing tests**: the sanity test, four V5 JIT/bytecode/eligibility tests, four V7/V11 streaming and recall tests, the V12 Delta-rule parity test, and the V12 zero-prior mask-discovery test (including an arbitrary vocabulary permutation).
+The suite currently reports **12 passing tests**: the sanity test, four V5 JIT/bytecode/eligibility tests, four V7/V11 streaming and recall tests, the V12 Delta-rule parity test, the V12 zero-prior mask-discovery test (including an arbitrary vocabulary permutation), and the v1.6.3 generate()/inspect_telemetry() test.
 
 ### 8.3 Full run
 

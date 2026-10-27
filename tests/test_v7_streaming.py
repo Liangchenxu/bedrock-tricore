@@ -370,6 +370,55 @@ def test_autonomous_masks_use_frequency_not_token_ids():
     assert torch.equal(reset7, x7 == 0)
 
 
+def test_v163_generate_and_telemetry():
+    torch.manual_seed(31)
+    device = torch.device("cpu")
+    model = TriCoreLM(
+        vocab_size=64,
+        d_model=128,
+        n_layers=1,
+        d_fast=32,
+        max_loops=2,
+    ).to(device)
+    model.eval()
+
+    prompt = torch.randint(0, 64, (2, 12), device=device)
+    out, telemetry = model.generate(
+        prompt,
+        max_new_tokens=6,
+        temperature=0.0,
+        return_telemetry=True,
+    )
+
+    assert out.shape == (2, 18)
+    assert out.requires_grad is False
+    assert telemetry["persistent_state_bytes"] == 2 * 17_408
+    assert telemetry["persistent_state_bytes_per_sample"] == 17_408
+    assert telemetry["surprise_trace"].shape == (2, 18)
+    assert model.training is False
+
+    tele = model.inspect_telemetry(prompt)
+    assert set(tele) == {
+        "logits",
+        "surprise_trace",
+        "write_gate",
+        "elig_gate",
+        "hop_weights",
+        "state_bytes_per_sample_fp32",
+        "state_bytes_per_sample_bf16",
+    }
+    assert tele["logits"].shape == (2, 12, 64)
+    assert tele["surprise_trace"].shape == (2, 12)
+    assert tele["write_gate"].shape == (2, 12, 4)
+    assert tele["elig_gate"].shape == (2, 12, 4)
+    assert tele["hop_weights"].shape == (2, 12, 3)
+    assert tele["state_bytes_per_sample_fp32"] == 17_408
+    assert tele["state_bytes_per_sample_bf16"] == 8_704
+    assert torch.isfinite(tele["write_gate"]).all()
+    assert torch.isfinite(tele["elig_gate"]).all()
+    assert model.training is False
+
+
 if __name__ == "__main__":
     test_streaming_forward_step_matches_full_forward()
     test_streaming_state_is_constant_17_kib_per_sample()
@@ -377,6 +426,7 @@ if __name__ == "__main__":
     test_v11_4hop_recall_and_gradients()
     test_v12_autonomous_and_delta_rule_parity()
     test_autonomous_masks_use_frequency_not_token_ids()
+    test_v163_generate_and_telemetry()
     print(
         "[PASS] V7 streaming, O(1) state, 3-hop, 4-hop, V12 Delta-rule and "
         "Track 7 mutation checks passed."

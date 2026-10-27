@@ -620,6 +620,153 @@ class TriCoreLM(nn.Module):
         mean_surprise = torch.stack(surprises, dim=0).mean(dim=0)
         return logits, mean_surprise
 
+    @torch.no_grad()
+    def generate(
+        self,
+        prompt_ids: torch.Tensor,
+        max_new_tokens: int = 32,
+        temperature: float = 1.0,
+        top_k: int = 0,
+        return_telemetry: bool = False,
+    ):
+        """Native O(1)-state autoregressive sequence generation using init_state and forward_step."""
+        was_training = self.training
+        self.eval()
+        if prompt_ids.dim() == 1:
+            prompt_ids = prompt_ids.unsqueeze(0)
+        B, L_prompt = prompt_ids.shape
+        device = prompt_ids.device
+        param_dtype = self.embedding.weight.dtype
+        states = self.init_state(B, device=device, dtype=param_dtype)
+
+        surprise_steps = []
+        logits_t = None
+        for t in range(L_prompt):
+            logits_t, s_t, states = self.forward_step(prompt_ids[:, t], states, step_idx=t)
+            surprise_steps.append(s_t)
+
+        generated = [prompt_ids]
+        for step in range(max_new_tokens):
+            next_logits = logits_t
+            if temperature <= 0.0:
+                next_token = next_logits.argmax(dim=-1, keepdim=True)
+            else:
+                scaled_logits = next_logits / max(temperature, 1e-5)
+                if top_k > 0 and top_k < scaled_logits.size(-1):
+                    v, _ = torch.topk(scaled_logits, top_k, dim=-1)
+                    scaled_logits = scaled_logits.masked_fill(
+                        scaled_logits < v[:, [-1]], float("-inf")
+                    )
+                probs = F.softmax(scaled_logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+            generated.append(next_token)
+            if step < max_new_tokens - 1 or return_telemetry:
+                logits_t, s_t, states = self.forward_step(
+                    next_token.squeeze(-1), states, step_idx=L_prompt + step
+                )
+                surprise_steps.append(s_t)
+
+        out_ids = torch.cat(generated, dim=1)
+        if was_training:
+            self.train()
+        if not return_telemetry:
+            return out_ids
+        state_bytes = sum(
+            tensor.numel() * tensor.element_size()
+            for layer_st in states
+            for tensor in layer_st
+        )
+        telemetry = {
+            "surprise_trace": torch.stack(surprise_steps, dim=1),
+            "persistent_state_bytes": state_bytes,
+            "persistent_state_bytes_per_sample": state_bytes // max(B, 1),
+        }
+        return out_ids, telemetry
+
+    @torch.no_grad()
+    def inspect_telemetry(self, idx: torch.Tensor) -> dict:
+        """Extract per-token synaptic telemetry: surprise, write_gate, elig_gate, hop_weights, and O(1) state bytes."""
+        was_training = self.training
+        self.eval()
+        B, L = idx.shape
+        x = self.embedding(idx)
+        separator_mask, reset_mask = self._build_masks(idx)
+        gate_role_logits = (
+            self.gate_role_table(idx).view(
+                B, L, self.layers[0].n_heads, 2, 1, 1
+            )
+            * self.gate_role_gain
+        )
+        layer_WriteGates = []
+        layer_EligGates = []
+        layer_HopWeights = []
+        layer_Surprises = []
+
+        for layer in self.layers:
+            H = layer.n_heads
+            u = layer.in_norm(x)
+            w_logits = layer.write_gate_proj(u).view(B, L, H, 1, 1)
+            e_logits = layer.elig_gate_proj(u).view(B, L, H, 1, 1)
+            token_gate_logits = (
+                layer.gate_token_proj(u).view(B, L, H, 2, 1, 1)
+                * layer.gate_logit_gain
+            )
+            w_logits = w_logits + token_gate_logits[:, :, :, 0]
+            e_logits = e_logits + token_gate_logits[:, :, :, 1]
+            w_logits = w_logits + gate_role_logits[:, :, :, 0]
+            e_logits = e_logits + gate_role_logits[:, :, :, 1]
+            if separator_mask is not None:
+                if isinstance(separator_mask, tuple):
+                    elig_sep, write_sep = separator_mask
+                    w_logits = w_logits - write_sep.to(w_logits.dtype).view(B, L, 1, 1, 1) * 8.0
+                    e_logits = e_logits - elig_sep.to(e_logits.dtype).view(B, L, 1, 1, 1) * 8.0
+                else:
+                    gm = separator_mask.to(w_logits.dtype).view(B, L, 1, 1, 1) * 8.0
+                    w_logits = w_logits - gm
+                    e_logits = e_logits - gm
+            hop_w = F.softmax(layer.hop_router(u), dim=-1)
+
+            x_next, s_trace = layer(
+                x,
+                enable_surprise_gate=self.enable_surprise_gate,
+                enable_fast_weight=self.enable_fast_weight,
+                enable_adaptive_loop=self.enable_adaptive_loop,
+                separator_mask=separator_mask,
+                reset_mask=reset_mask,
+                enable_delta_rule=self.enable_delta_rule,
+                gate_role_logits=gate_role_logits,
+            )
+            if self.enable_surprise_gate:
+                s_5d = s_trace.view(B, L, 1, 1, 1)
+                w_gate = torch.sigmoid(w_logits + s_5d - 0.5).squeeze(-1).squeeze(-1)
+                e_gate = torch.sigmoid(e_logits + s_5d - 0.5).squeeze(-1).squeeze(-1)
+            else:
+                w_gate = torch.ones(B, L, H, device=idx.device, dtype=x.dtype)
+                e_gate = torch.ones(B, L, H, device=idx.device, dtype=x.dtype)
+
+            layer_WriteGates.append(w_gate)
+            layer_EligGates.append(e_gate)
+            layer_HopWeights.append(hop_w)
+            layer_Surprises.append(s_trace)
+            x = x_next
+
+        logits = self.lm_head(self.final_norm(x))
+        sample_state = self.init_state(1, device=idx.device, dtype=x.dtype)
+        state_bytes_per_sample = sum(
+            t.numel() * t.element_size() for st in sample_state for t in st
+        )
+        if was_training:
+            self.train()
+        return {
+            "logits": logits,
+            "surprise_trace": torch.stack(layer_Surprises, dim=0).mean(dim=0),
+            "write_gate": torch.stack(layer_WriteGates, dim=0).mean(dim=0),
+            "elig_gate": torch.stack(layer_EligGates, dim=0).mean(dim=0),
+            "hop_weights": torch.stack(layer_HopWeights, dim=0).mean(dim=0),
+            "state_bytes_per_sample_fp32": state_bytes_per_sample,
+            "state_bytes_per_sample_bf16": state_bytes_per_sample // 2,
+        }
+
 
 class BaselineTransformerLM(nn.Module):
     def __init__(
