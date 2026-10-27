@@ -549,6 +549,7 @@ bedrock-tricore/
 │   ├── V10_METRICS.json         # eligibility-trace metrics
 │   ├── V11_METRICS.json         # Track 5/6/4B + Welch tests
 │   ├── V13_METRICS.json         # V13 definitive four-arm × three-seed metrics
+│   ├── equations/               # eight core architecture equation PNG boards
 │   ├── tricore_v11_masterpiece.png
 │   ├── tricore_v12_apex.png
 │   ├── tricore_v13_definitive.png
@@ -1287,6 +1288,7 @@ bedrock-tricore/
 │   ├── V10_METRICS.json         # 资格迹指标
 │   ├── V11_METRICS.json         # Track 5/6/4B + Welch 检验
 │   ├── V13_METRICS.json         # V13 四臂 × 三 seed 最终指标
+│   ├── equations/               # 八张核心架构公式 PNG
 │   ├── tricore_v11_masterpiece.png
 │   ├── tricore_v12_apex.png
 │   ├── tricore_v13_definitive.png
@@ -1774,19 +1776,11 @@ TriCore is a residual sequence block with three independently ablatable engines.
 
 ### 2.1 Causal input path
 
-```text
-u_t = LN(x_t),      ũ_t = SiLU(W_u u_t + b_u)
-```
+<p align="center"><code>u_t = LN(x_t),      ũ_t = SiLU(W_u u_t + b_u)</code></p>
 
-```text
-a_t = normalize(W_a u_t)
-```
+<p align="center"><code>a_t = normalize(W_a u_t)</code></p>
 
-```text
-Q_t = normalize(a_t + 0.15 W_q u_t),
-K_t = normalize(a_t + 0.15 W_k u_t),
-V_t = a_t + 0.15 W_v u_t
-```
+<p align="center"><code>Q_t = normalize(a_t + 0.15 W_q u_t),<br/>K_t = normalize(a_t + 0.15 W_k u_t),<br/>V_t = a_t + 0.15 W_v u_t</code></p>
 
 <p align="center"><code>w_t^hop = softmax(W_r u_t)</code></p>
 
