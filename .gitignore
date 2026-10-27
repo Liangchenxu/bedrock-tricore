@@ -31,6 +31,8 @@ _v5_smoke*.txt
 results/*
 !results/BENCHMARK_REPORT.md
 !results/*.png
+!results/equations/
+!results/equations/*.png
 !results/V9_METRICS.json
 !results/V10_METRICS.json
 !results/V11_METRICS.json

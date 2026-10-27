@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>Bedrock-TriCore (<code>bedrock-tricore</code> v1.6.1)</h1>
+  <h1>Bedrock-TriCore (<code>bedrock-tricore</code> v1.6.2)</h1>
   <h3><i>An Attention-Free, Constant-State O(1) Sequence Operator with Causal Delta-Rule Fast Weights and Latent Multi-Hop Chaining</i></h3>
   <p><b>恒定状态 O(1) 无注意力序列算子：因果 Delta 规则快权重、突触资格迹与隐空间多跳循环</b></p>
 
@@ -26,13 +26,13 @@
 >
 > **摘要。** `bedrock-tricore` 是一种保持恒定 O(1) 持久化推理状态（FP32 下单样本恒为 **17,408 B / 17.00 KiB**）的无注意力序列算子，结合了惊奇门控与突触资格迹（Engine I）、因果移位 Delta 规则快权重（Engine II）以及融合隐空间多跳平衡循环（Engine III）。
 >
-> **Formula rendering.** Formulas are written as Unicode plain text so they render correctly on both GitHub and PyPI; PyPI does not support LaTeX or MathJax.
+> **Formula rendering.** The eight core equation sets are published as 300-DPI Computer Modern PNGs embedded from this repository, so GitHub and PyPI render them identically; PyPI does not support LaTeX or MathJax. Every other formula is written in plain Unicode text.
 >
-> **公式渲染。** 公式使用 Unicode 纯文本表示，以确保在 GitHub 与 PyPI 上都能正确显示；PyPI 不支持 LaTeX 或 MathJax。
+> **公式渲染。** 八组核心公式以 300 DPI Computer Modern 高清 PNG 内嵌自本仓库，确保 GitHub 与 PyPI 渲染完全一致；PyPI 不支持 LaTeX 或 MathJax。其余公式均以纯 Unicode 文本书写。
 
-> **Release 1.6.1.** Packaging-only patch: the PyPI long description now uses Unicode plain-text formulas. No model, API, benchmark, or numerical result changed.
+> **Release 1.6.2.** Rendering-only patch: the eight core architecture equation sets now ship as 300-DPI Computer Modern PNGs under `results/equations/`, embedded identically in Part I and Part II, with every remaining formula written in plain Unicode. No model, API, benchmark, or numerical result changed.
 >
-> **1.6.1 发布说明。** 仅打包修正：PyPI 长描述改用 Unicode 纯文本公式；模型、API、基准与数值结果均未改变。
+> **1.6.2 发布说明。** 仅渲染修正：八组核心架构公式已渲染为 300 DPI Computer Modern 高清 PNG（`results/equations/`），并在 Part I 与 Part II 中一致内嵌；其余公式全部改用纯 Unicode。模型、API、基准与数值结果均未改变。
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/tricore_vs_transformer.png" alt="Bedrock-TriCore V13 six-panel panorama: mutation accuracy, static/hot retention, stale confusion, 1M-token memory, decode latency, and multi-hop depth" width="100%">
@@ -44,7 +44,7 @@
 
 ## Part I: English Flagship Specification
 
-> **Reading contract.** Part I is the current, self-contained technical specification for `bedrock-tricore` v1.6.1. Part II is its full Chinese counterpart. Part III is an append-only archive: every V4–V13 release note, table, correction, and self-audit is preserved verbatim so that no historical claim is silently rewritten. Where an older section and this specification disagree, the newer measured result and its stated scope govern.
+> **Reading contract.** Part I is the current, self-contained technical specification for `bedrock-tricore` v1.6.2. Part II is its full Chinese counterpart. Part III is an append-only archive: every V4–V13 release note, table, correction, and self-audit is preserved verbatim so that no historical claim is silently rewritten. Where an older section and this specification disagree, the newer measured result and its stated scope govern.
 
 ### Contents of Part I
 
@@ -64,9 +64,7 @@
 
 **Bedrock** is a promise about the *persistent inference state*, not about parameter count, training memory, or floating-point throughput. A Transformer's decoding state is a growing key/value archive: every generated token appends another slice, so the state is a function of context length. Bedrock-TriCore replaces that archive with three fixed-size tensors per layer. For the reference configuration (`d_model=128`, `H=4`, `d_head=32`, FP32), the complete per-sample decode state is:
 
-```text
-M_{state} = (128 × 4) [h: 512 B] + (4 × 32 × 32 × 4) [F_{mat}: 16,384 B] + (4 × 32 × 1 × 4) [prev_k: 512 B] = 17,408 B = 17.00 KiB.
-```
+<p align="center"><code>M_state = (128 × 4) [h: 512 B] + (4 × 32 × 32 × 4) [F_mat: 16,384 B] + (4 × 32 × 1 × 4) [prev_k: 512 B] = 17,408 B = 17.00 KiB.</code></p>
 
 That number does not contain `L`. It is identical at 128 tokens, at 32K, at 131K, and at 1,048,576 tokens. The 1M-token CUDA profile measured 2,147,483,648 bytes (2.00 GiB) of K/V cache for a real two-layer cached decoder and 17,408 bytes for Bedrock-TriCore: a **123,361.9×** reduction in persistent state. Decode latency at 1M was **274.275 ms/token** for the cached Transformer and **3.794 ms/token** for TriCore, a **72.30×** per-token speed advantage. This is the sense in which Bedrock is “unbreakable”: the foundation does not grow with the height of the context.
 
@@ -127,33 +125,23 @@ The implementation is a compiled graph of tensor operations, not a custom CUDA k
 
 A standard causal self-attention layer compares every position with every earlier position. Its training activation cost grows as `O(L²)` and its inference cache grows as `O(L)`. For a decoder with `n_layers` layers, `n_heads` heads, head width `d_head`, and FP32 storage, the conventional K/V cache is:
 
-```text
-M_{KV}(L) = 2 × n_{layers} × L × n_{heads} × d_{head} × 4 bytes.
-```
+<p align="center"><code>M_KV(L) = 2 × n_layers × L × n_heads × d_head × 4 bytes.</code></p>
 
 With `n_layers=2`, `n_heads=4`, `d_head=32` (`d_model=128`):
 
-```text
-M_{KV}(1,048,576) = 2 × 2 × 1,048,576 × 4 × 32 × 4 = 2,147,483,648 B = 2.00 GiB.
-```
+<p align="center"><code>M_KV(1,048,576) = 2 × 2 × 1,048,576 × 4 × 32 × 4 = 2,147,483,648 B = 2.00 GiB.</code></p>
 
 Bedrock-TriCore's state is independent of `L`:
 
-```text
-M_{TriCore} = (D + H d_{head}^2 + H d_{head}) × 4 = (128 + 4 × 32^2 + 4 × 32) × 4 = 17,408 B.
-```
+<p align="center"><code>M_TriCore = (D + H d_head^2 + H d_head) × 4 = (128 + 4 × 32^2 + 4 × 32) × 4 = 17,408 B.</code></p>
 
 The measured ratio is:
 
-```text
-(M_{KV}(1,048,576))/(M_{TriCore}) = (2,147,483,648)/(17,408) = 123,361.9×.
-```
+<p align="center"><code>(M_KV(1,048,576))/(M_TriCore) = (2,147,483,648)/(17,408) = 123,361.9×.</code></p>
 
 Latency tells the same story once the cache is large enough to dominate memory traffic. At 128 tokens the small cached Transformer is faster (`1.277` vs `2.596 ms/token`). The measured crossover occurs at `L=8,192` (`3.339` vs `3.151 ms/token`). At 1M the Transformer reaches **274.275 ms/token**, while TriCore remains at **3.794 ms/token**:
 
-```text
-(274.275)/(3.794) = 72.30×.
-```
+<p align="center"><code>(274.275)/(3.794) = 72.30×.</code></p>
 
 **Protocol honesty.** These are real `torch.cuda.memory_allocated()` deltas after `empty_cache()` and real cached-decoder timings on one RTX 3060 at batch size 1, FP32. The Transformer baseline actually allocates, writes, and attends over the full causal K/V cache. Timed/warm-up steps are 32/8 through 32,768, 16/4 at 65,536–131,072, and 8/2 at 262,144–1,048,576. This is not serving throughput, not multi-batch throughput, and not a claim that TriCore's training is cheaper.
 
@@ -179,15 +167,11 @@ The reduction column divides the measured tensor bytes, not the allocator delta.
 
 A linear recurrent memory can be written as an outer-product accumulator. In its simplest Hebbian form, with a per-head learning rate `η` and decay `λ`:
 
-```text
-F_t = λ F_{t-1} + η V_t K_{t-1}^{T}.
-```
+<p align="center"><code>F_t = λ Fₜ₋₁ + η V_t Kₜ₋₁ᵀ.</code></p>
 
-At query key `k`, the retrieved value is `F_t k`. If the same key is written four times with values `v^{(1)},...,v^{(4)}` and no decay (`λ=1`), the read contains a superposition:
+At query key `k`, the retrieved value is `F_t k`. If the same key is written four times with values `v⁽¹⁾,...,v⁽⁴⁾` and no decay (`λ=1`), the read contains a superposition:
 
-```text
-F_t k = η ∑_{r=1}^{4} v^{(r)} + crosstalk.
-```
+<p align="center"><code>F_t k = η ∑ᵣ₌₁⁴ v⁽ʳ⁾ + crosstalk.</code></p>
 
 Changing the newest value does not remove the old ones. Lowering `λ` eventually makes old contributions small, but it also attenuates **every** early binding, including the static variables that were never overwritten. That is the decay-interference dilemma:
 
@@ -200,15 +184,11 @@ Changing the newest value does not remove the old ones. Lowering `λ` eventually
 
 The Delta-rule fast-weight update adds a prediction-error term:
 
-```text
-F_t = λ_f F_{t-1} + η_{eff,t}(V_t - F_{t-1}K_{t-1})K_{t-1}^{T}.
-```
+<p align="center"><code>F_t = λ_f Fₜ₋₁ + η_eff,t(V_t - Fₜ₋₁Kₜ₋₁)Kₜ₋₁ᵀ.</code></p>
 
-For an isolated unit-norm key `k`, with `λ_f = 1`, `η_eff = 1`, and `F_{t-1} k = v_{old}`, the new read is exactly the new value:
+For an isolated unit-norm key `k`, with `λ_f = 1`, `η_eff = 1`, and `Fₜ₋₁ k = v_old`, the new read is exactly the new value:
 
-```text
-F_t k = v_{old} + (v_{new} - v_{old})(k^{T}k) = v_{new}.
-```
+<p align="center"><code>F_t k = v_old + (v_new - v_old)(kᵀk) = v_new.</code></p>
 
 This is the targeted erasure that a global decay cannot express. It is also why the V13 improvement is concentrated in the hot and stale columns: Delta is not “forgetting faster”; it is subtracting the addressed stale value before writing the replacement.
 
@@ -229,11 +209,7 @@ At the conventional 0.05 level the overall, hot, and stale contrasts reject the 
 
 Engine I supplies the second half of the mechanism. Its synaptic eligibility trace is the frozen previous key, and the trace-conditioned read is:
 
-```text
-q_t^{read} = normalize(e_t q_t + (1-e_t) prev_k_t),
-
-prev_k_{t+1} = normalize((1-e_t) prev_k_t + e_t K_t).
-```
+<p align="center"><code>q_t^read = normalize(e_t q_t + (1-e_t) prev_k_t),<br/>prev_kₜ₊₁ = normalize((1-e_t) prev_k_t + e_t K_t).</code></p>
 
 When the eligibility gate closes at an infix connector (`e_t ≈ 0`), the read dereferences the preceding entity and `prev_k` does not advance. The next token's value is therefore written at that entity's key, producing the shifted binding `F(alias)=var`. When the trace is wrong, the two-hop dereference has no address to follow. The V13 Fair No-Engine-I arm keeps Delta and the learned write path but disables the surprise gate; it falls to **37.89%**, confirming that erasure alone is not enough without a stable address.
 
@@ -243,9 +219,7 @@ A standard model without an explicit chain-of-thought scratchpad has a depth pro
 
 With a fixed budget `L_max`, the initial read is hop 1, and each refinement step is one further latent dereference. The physical depth stays one block; the loop count is a compute budget, and the router learns how to weight each hop. In Track 6, four tiers are shuffled behind a 12-token adversarial gap. The one-layer Full model uses `max_loops=3` and reaches **100.00% in-domain / 100.00% at the 4× gap**, with query-position routing mass:
 
-```text
-w^{hop} = [0.005, 0.004, 0.003, 0.988].
-```
+<p align="center"><code>w^hop = [0.005, 0.004, 0.003, 0.988].</code></p>
 
 The router puts **98.8%** of its query mass on hop 4. The two shallower budgets do not partially solve the task; they collapse onto their last available slot and remain at chance:
 
@@ -405,216 +379,57 @@ Notation: `B` batch, `L` sequence length, `D` model width, `H` heads, `d_head` h
 
 #### 4.1 Subspace-Aligned Canonical Addressing
 
-Each token is normalized before any projection:
+Each token is normalized before any projection, projected to a shared normalized address, and `Q`, `K`, and `V` are residuals around that address with a fixed residual scale of `0.15`. The hop router is a softmax over the initial read plus `L_max` refinements:
 
-```text
-u_t = LN(x_t),      ũ_t = SiLU(W_u u_t + b_u).
-```
-
-A shared address is projected and normalized:
-
-```text
-a_t = normalize(W_a u_t) ∈ ℝ^{H × d_{head}}.
-```
-
-`Q`, `K`, and `V` are residuals around that shared address, with a fixed residual scale of `0.15`:
-
-```text
-Q_t = normalize(a_t + 0.15 W_q u_t),
-```
-
-```text
-K_t = normalize(a_t + 0.15 W_k u_t),
-```
-
-```text
-V_t = a_t + 0.15 W_v u_t.
-```
-
-The hop router is a softmax over the initial read plus `L_max` refinements:
-
-```text
-w_t^{hop} = softmax(W_r u_t) ∈ ℝ^{L_{max}+1}.
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq1_addressing.png" alt="Equation 1: subspace-aligned canonical addressing, Q/K/V residuals and hop router" height="121"/></p>
 
 There is no positional embedding and no attention over sequence positions. The only softmax over positions is this hop router, whose support is the fixed hop budget rather than `L`. The shared normalized address is what makes a retrieved bridge reusable as the next query: a value written under an address is read back in the same metric space.
 
-**Zero-prior role discovery.** When `autonomous_syntax=True` and all token-role arguments are `None`, the model computes within-sequence occurrence counts:
+**Zero-prior role discovery.** When `autonomous_syntax=True` and all token-role arguments are `None`, the model computes within-sequence occurrence counts, derives the `structural`, `delimiter`, and `infix` masks from them, and binds the three Engine I gates to those masks:
 
-```text
-f_t = ∑_{u=1}^{L} 1[x_t = x_u].
-```
-
-It then defines:
-
-```text
-structural_t = 1[f_t ≥ max(6, ⌊ L/10 ⌋)],
-```
-
-```text
-delimiter_t = structural_t ∧ 1[x_t = x_L],
-```
-
-```text
-infix_t = structural_t ∧ ¬delimiter_t ∧ 1[f_{t-1} ≤ F_{max}].
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq2_autonomous_freq.png" alt="Equation 2: zero-prior frequency counting and unsupervised syntax masks" height="172"/></p>
 
 `F_max` is `autonomous_entity_max_freq`: **4** by default (V12), **6** in V13 because one LET + four SETs + one NOP gives each hot variable six occurrences. `write_sep_mask = structural`; `elig_sep_mask = infix`; `reset_mask = delimiter`. The masks add no parameters and no recurrent state. Discovery is `O(B L²)` token-equality comparisons for a short closed-syntax sequence; it is disabled for the 1M profile, and the one-token streaming API has no sequence-frequency context. Because only equality counts matter, a permutation of vocabulary IDs leaves every mask unchanged.
 
 #### 4.2 Engine I — Surprise-Gated State Collapse, Write Protection, Synaptic Eligibility Trace, and Unsupervised Role Discovery
 
-Engine I has two state effects. The first is a per-dimension collapse state `h_t`, initialized to zero. The prediction error is the absolute difference between the transformed input and the previous collapse:
+Engine I has two state effects. The first is a per-dimension collapse state `h_t`, initialized to zero: the prediction error is the absolute difference between the transformed input and the previous collapse, the surprise gate is a sigmoid of the learned projection plus that error, and the scalar surprise is the mean gate activation. The second effect is write protection: a learned per-head write logit is combined with a short token-to-gate path and the discovered structural mask, which attenuates — never amplifies — the effective fast-weight learning rate. The collapse update carries a learned per-dimension decay `λ = sigmoid(base_decay_logit)`:
 
-```text
-e_t^{surp} = |ũ_t - h_{t-1}|,
-
-g_t = σ(W_s u_t + e_t^{surp}).
-```
-
-The scalar surprise is the mean gate activation:
-
-```text
-s_t = (1)/(D)∑_{j=1}^{D} g_{t,j}.
-```
-
-The collapse update uses a learned per-dimension decay `λ = sigmoid(base_decay_logit)` and the surprise gate:
-
-```text
-h_t = λ ⊙ (1 - 0.5 g_t) ⊙ h_{t-1} + g_t ⊙ ũ_t.
-```
-
-The second effect is write protection. A learned per-head write logit is combined with a short token-to-gate path and with the discovered structural mask:
-
-```text
-ℓ_t^{w} = W_w u_t + 8 G_w(u_t) - 8 structural_t,
-```
-
-```text
-ω_t = σ(ℓ_t^{w} + s_t - 0.5).
-```
-
-The effective fast-weight learning rate is attenuated, never amplified:
-
-```text
-η_{eff,t} = η ⊙ ω_t,
-
-η = sigmoid(fast_lr_logit).
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq3_engine1_surprise.png" alt="Equation 3: Engine I surprise gating, write protection and state collapse" height="210"/></p>
 
 This is why `enable_surprise_gate=False` is a *fair* ablation: it removes the learned write path and the surprise modulation, but it does not change parameter shapes. In that mode the implementation sets `g_t=0.5`, `s_t=0.5`, `η_eff=1.0`, `decay=1.0`, and applies no learned gate.
 
-The third effect is the synaptic eligibility trace. An eligibility gate is produced by a parallel head-wise logit, closed at infix connectors:
+The third effect is the synaptic eligibility trace. An eligibility gate is produced by a parallel head-wise logit, closed at infix connectors. Unlike the write gate, this gate does **not** attenuate the fast-weight write; it controls which key is addressed. The trace-conditioned query, the next trace, and the delimiter reset are:
 
-```text
-ℓ_t^{e} = W_e u_t + 8 G_e(u_t) - 8 infix_t,
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq4_eligibility_trace.png" alt="Equation 4: synaptic eligibility trace latch and conditional cross-EQ read" height="90"/></p>
 
-```text
-e_t = σ(ℓ_t^{e} + s_t - 0.5).
-```
-
-Unlike the write gate, this gate does **not** attenuate the fast-weight write. It controls which key is addressed. The trace-conditioned query and the next trace are:
-
-```text
-q_t^{read} = normalize(e_t q_t + (1-e_t) prev_k_t),
-```
-
-```text
-prev_k_{t+1} = normalize((1-e_t) prev_k_t + e_t K_t).
-```
-
-When the gate closes at an infix connector (`e_t ≈ 0`), the read dereferences the frozen preceding entity and `prev_k` does not advance. The following token's value is written at that entity key. This is the shifted binding `F(alias)=var`, and it is the direction that makes `alias -> var -> lit` work. An open-at-EQ convention would write `F(EQ)=var` and could not support the chain.
-
-A delimiter reset is applied after the trace update:
-
-```text
-prev_k_{t+1} ← (1-r_t)prev_k_{t+1},
-     r_t = delimiter_t.
-```
-
-This zeroes the trace at statement boundaries without changing any parameter or tensor shape. It is enabled explicitly in Track 6 and discovered automatically in Track 5/7.
+When the gate closes at an infix connector (`e_t ≈ 0`), the read dereferences the frozen preceding entity and `prev_k` does not advance. The following token's value is written at that entity key. This is the shifted binding `F(alias)=var`, and it is the direction that makes `alias -> var -> lit` work. An open-at-EQ convention would write `F(EQ)=var` and could not support the chain. The delimiter reset that closes the block zeroes the trace at statement boundaries without changing any parameter or tensor shape; it is enabled explicitly in Track 6 and discovered automatically in Track 5/7.
 
 #### 4.3 Engine II — Causal Shifted Delta-Rule Fast Weights versus Additive Hebbian Outer Products
 
-Engine II stores one `[H, d_head, d_head]` matrix per sample, initialized to zero, plus the previous key trace. At `t=0` no write occurs and the first read is zero. For `t>0`, the Delta-rule update is:
+Engine II stores one `[H, d_head, d_head]` matrix per sample, initialized to zero, plus the previous key trace. At `t=0` no write occurs and the first read is zero. The additive Hebbian accumulator that Engine II replaces sums every outer product into the same matrix, so four rounds of hot mutation leave the stale values superposed at the queried key:
 
-```text
-F_t = λ_f ⊙ F_{t-1}
-+ η_{eff,t} ⊙ (V_t - F_{t-1}K_{t-1})K_{t-1}^{T},
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq5_hebbian_conflict.png" alt="Equation 5: additive Hebbian accumulation and multi-round overwrite conflict" height="127"/></p>
 
-where `λ_f = sigmoid(fast_decay_logit)` is per head. The Hebbian control uses exactly the same decay and learning-rate schedule but drops the erase term:
+The Delta-rule update replaces that additive outer product with a prediction-error erase term and a per-head decay `λ_f = sigmoid(fast_decay_logit)`:
 
-```text
-F_t^{Hebb} = λ_f ⊙ F_{t-1}^{Hebb}
-+ η_{eff,t} ⊙ V_t K_{t-1}^{T}.
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq6_engine2_delta.png" alt="Equation 6: Engine II causal shifted delta rule and exact fixed-point erasure" height="97"/></p>
 
-The read happens **after** the write:
+The read `r⁽⁰⁾ = Fₜ qₜ_read` happens **after** the write. The write is causal and shifted: `prev_k = Kₜ₋₁`, not `K_t`. In a `[k_i, m_i, 0]` block it binds `k_i -> m_i`; in a `[m_i, v_i, 0]` block it binds `m_i -> v_i`. This shift is what allows a value at position `t` to be stored under the address seen at `t-1`.
 
-```text
-r_t^{(0)} = F_t q_t^{read}.
-```
-
-The write is causal and shifted: `prev_k = K_{t-1}`, not `K_t`. In a `[k_i, m_i, 0]` block it binds `k_i -> m_i`; in a `[m_i, v_i, 0]` block it binds `m_i -> v_i`. This shift is what allows a value at position `t` to be stored under the address seen at `t-1`.
-
-The Delta erase has a precise conditional identity. For an isolated unit-norm key `k`, with `λ_f=1`, `η_eff=1`, and `F_{t-1}k=v_{old}`:
-
-```text
-F_t k = F_{t-1}k + (v_{new} - F_{t-1}k)(k^{T}k) = v_{new}.
-```
-
-The Hebbian control instead accumulates:
-
-```text
-F_t^{Hebb}k = v_{old} + v_{new}
-```
-
-under the same idealization, so a read cannot distinguish the newest value from the stale one. Real keys are not exactly orthogonal, so cross-talk exists; the V13 measurements quantify the consequence rather than assuming the idealized identity.
+The Delta erase has a precise conditional identity. For an isolated unit-norm key `k`, with `λ_f=1`, `η_eff=1`, and `Fₜ₋₁k=v_old`, the new read is exactly the new value. The Hebbian control instead accumulates `v_old + v_new` under the same idealization, so a read cannot distinguish the newest value from the stale one. Real keys are not exactly orthogonal, so cross-talk exists; the V13 measurements quantify the consequence rather than assuming the idealized identity.
 
 **Ablation semantics.** `enable_fast_weight=False` skips Engine II entirely; `z=h_seq`, and Engine III has no memory to read. Flags gate compute only; all modules are constructed regardless, so parameter counts stay equal across the five-way ablation.
 
 #### 4.4 Engine III — Zero-`F_seq` Fused Latent Multi-Hop Synaptic Equilibrium Loop
 
-Engine III reuses `F_t` as a latent query space. It does not create another memory or another physical layer. The initial read and accumulation are:
+Engine III reuses `F_t` as a latent query space. It does not create another memory or another physical layer. The initial read, the fixed-hop refinement, the routed accumulation, and the readout are:
 
-```text
-r^{(0)} = r_t^{(0)},      r_{accum} = w_{t,0}^{hop} r^{(0)}.
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq7_engine3_multihop.png" alt="Equation 7: Engine III latent multi-hop equilibrium loop and soft-routed readout" height="181"/></p>
 
-For `i = 0, ..., L_max-1`:
+`r⁽ⁱ⁾` has shape `[B, H, d_head, 1]`; `H_i` has shape `[1, H, d_head, d_head]`; normalization is L2 over `dim=-2`. With `max_loops=2`, the initial read is hop 1, the first refinement is hop 2, and the second refinement is an extra latent step; with `max_loops=3`, four edges are reachable. The loop count is fixed; the router changes weights, not depth.
 
-```text
-q^{(i+1)} = normalize(r^{(i)} + H_i r^{(i)}),
-```
-
-```text
-r^{(i+1)} = F_t q^{(i+1)},
-
-r_{accum} ← r_{accum} + w_{t,i+1}^{hop} r^{(i+1)}.
-```
-
-The output is the routed accumulation:
-
-```text
-r_t^{out} = r_{accum}.
-```
-
-`r^{(i)}` has shape `[B, H, d_head, 1]`; `H_i` has shape `[1, H, d_head, d_head]`; normalization is L2 over `dim=-2`. With `max_loops=2`, the initial read is hop 1, the first refinement is hop 2, and the second refinement is an extra latent step; with `max_loops=3`, four edges are reachable. The loop count is fixed; the router changes weights, not depth.
-
-The readout fuses the collapse state and the routed memory:
-
-```text
-z_t = h_t + W_o vec(r_t^{out}),
-```
-
-```text
-z_t ← z_t + s_t ⊙ MLP(LN(z_t)),
-
-y_t = x_t + LN(z_t).
-```
-
-When `enable_adaptive_loop=False`, `r_t^out=r_t^(0)` and the refinement MLP is skipped. When `enable_fast_weight=False`, `z=h_seq` and Engine III has no memory to read.
+When `enable_adaptive_loop=False`, `r_out = r⁽⁰⁾` and the refinement MLP is skipped. When `enable_fast_weight=False`, `z=h_seq` and Engine III has no memory to read.
 
 **Why “zero-`F_seq`” matters.** The naive implementation would materialize a tensor `[B, L, H, d_head, d_head]` so that every position could read its own fast-weight snapshot. V9 instead fuses Engine III into the scripted causal scan. At each timestep, the scan uses the current `F_t`, performs the fixed-hop refinements immediately, and emits only:
 
@@ -635,14 +450,7 @@ The persistent inference state per layer is exactly three tensors. For `D=128`, 
 | `prev_k` | `[B, H, d_head, 1]` | 4 × 32 = 128 per sample | **512** | Synaptic eligibility trace |
 | **Total** | — | **4,352 floats** | **17,408** | **17.00 KiB per sample** |
 
-```text
-M_{state} = (4D) [h] + (4Hd_{head}^2) [F_{mat}] + (4Hd_{head}) [prev_k]
-= 512 + 16,384 + 512 = 17,408 B.
-```
-
-```text
-17,408 B ÷ 1,024 = 17.00 KiB.
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq8_state_cache.png" alt="Equation 8: constant O(1) state accounting versus Transformer KV cache" height="145"/></p>
 
 The formula is configuration-dependent; **17.00 KiB is the reference configuration**, not a universal constant for every model width. For V13's `D=64`, `H=4`, `d_head=16`, the same formula gives `256 + 4,096 + 256 = 4,608 B = 4.50 KiB` per layer. The O(1)-in-`L` property holds for both; only the constant changes. The flagship 17.00 KiB number and every 1M comparison in this document refer to the `D=128` reference configuration used in the CUDA profile.
 
@@ -671,10 +479,10 @@ The formula is configuration-dependent; **17.00 KiB is the reference configurati
    │ write gate ω_t     │                     ▼                              │
    │ eligibility e_t    │          ┌──────────────────────┐                    │
    └─────────┬──────────┘          │ ENGINE II            │                    │
-             │                     │ F_t = λ F_{t-1}      │                    │
+             │                     │ F_t = λ Fₜ₋₁         │                    │
              │                     │   + η_eff (V_t -     │                    │
-             │                     │   F_{t-1}K_{t-1})    │                    │
-             │                     │   K_{t-1}^T          │                    │
+             │                     │   Fₜ₋₁Kₜ₋₁)          │                    │
+             │                     │   Kₜ₋₁ᵀ              │                    │
              │                     │ read q_t^read        │                    │
              │                     └──────────┬───────────┘                    │
              │                                │                                │
@@ -755,7 +563,7 @@ bedrock-tricore/
 ├── run_v13_definitive.py        # V13 resumable Delta/Hebbian/Fair/Transformer
 ├── demo_showcase.py             # one-command streaming demo, no checkpoint
 ├── requirements.txt             # torch, numpy, matplotlib
-├── pyproject.toml               # installable bedrock-tricore 1.6.1, MIT
+├── pyproject.toml               # installable bedrock-tricore 1.6.2, MIT
 ├── LICENSE                      # MIT
 ├── .gitignore                   # caches, venvs, checkpoints; keeps reports/PNGs
 ├── SPEC.md                      # original operator specification
@@ -764,7 +572,7 @@ bedrock-tricore/
 └── README.md                    # this bilingual flagship document
 ```
 
-The import package is `tricore`; the distribution name is `bedrock-tricore`. `pyproject.toml` declares `bedrock-tricore==1.6.1`, Python `>=3.10`, and runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`.
+The import package is `tricore`; the distribution name is `bedrock-tricore`. `pyproject.toml` declares `bedrock-tricore==1.6.2`, Python `>=3.10`, and runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`.
 
 ---
 
@@ -938,7 +746,7 @@ Verification suite: **11 tests pass** with `python -m pytest -q`. Coverage inclu
 
 1. **Three-tensor law.** Persistent decode state per layer is exactly `(h, F_mat, prev_k)`. No KV cache, hidden position table, or per-token archive is part of the state.
 2. **Constant-byte law.** For a fixed configuration, state bytes are independent of `L`. At `D=128,H=4,d_head=32`, the budget is exactly 17,408 B = 17.00 KiB.
-3. **Causality law.** The fast-weight write at step `t` uses `K_{t-1}` and `V_t`; no future token can influence an earlier read.
+3. **Causality law.** The fast-weight write at step `t` uses `Kₜ₋₁` and `V_t`; no future token can influence an earlier read.
 4. **Read-after-write law.** `r_t^(0) = F_t q_t^read`; a token cannot read a matrix state that does not yet include its own causal write.
 5. **Shared-address law.** `Q`, `K`, and `V` are residual perturbations of the same normalized `a_t`; a retrieved bridge is therefore a valid query in the same metric space.
 6. **No-positional-attention law.** There is no positional embedding and no softmax over sequence positions. The only positional softmax is over the fixed hop budget.
@@ -974,7 +782,7 @@ Bedrock-TriCore is best understood as a **controlled demonstration of a design t
 
 ## Part II: 中文旗舰技术白皮书（完整版）
 
-> **阅读契约。** 本部分是 `bedrock-tricore` v1.6.1 当前、自洽、完整的中文技术规范，与 Part I 英文旗舰版逐章对等。Part III 是只追加、不覆盖的历史档案：V4 至 V13 的每一份发布记录、表格、修正与自我审计都原样保留，任何旧结论都不会被静默改写。若旧章节与本文冲突，以更新的实测结果及其明确声明的适用范围为准。
+> **阅读契约。** 本部分是 `bedrock-tricore` v1.6.2 当前、自洽、完整的中文技术规范，与 Part I 英文旗舰版逐章对等。Part III 是只追加、不覆盖的历史档案：V4 至 V13 的每一份发布记录、表格、修正与自我审计都原样保留，任何旧结论都不会被静默改写。若旧章节与本文冲突，以更新的实测结果及其明确声明的适用范围为准。
 
 ### 本部分目录
 
@@ -994,9 +802,7 @@ Bedrock-TriCore is best understood as a **controlled demonstration of a design t
 
 **Bedrock（基岩）** 承诺的是**持久化推理状态**，而不是参数量、训练显存或浮点吞吐。Transformer 的解码状态是一个不断增长的键值档案：每生成一个 Token 就追加一片 K/V，因此状态大小是上下文长度的函数。Bedrock-TriCore 用每层三个定长张量取代这个档案。参考配置为 `d_model=128`、`H=4`、`d_head=32`、FP32，此时单样本完整解码状态为：
 
-```text
-M_{state} = (128 × 4) [h: 512 B] + (4 × 32 × 32 × 4) [F_{mat}: 16,384 B] + (4 × 32 × 1 × 4) [prev_k: 512 B] = 17,408 B = 17.00 KiB.
-```
+<p align="center"><code>M_state = (128 × 4) [h: 512 B] + (4 × 32 × 32 × 4) [F_mat: 16,384 B] + (4 × 32 × 1 × 4) [prev_k: 512 B] = 17,408 B = 17.00 KiB.</code></p>
 
 这个数字里没有 `L`。无论上下文是 128、32K、131K 还是 1,048,576 个 Token，它都完全相同。1M Token 的真实 CUDA 实测中，两层缓存式 Transformer 的 K/V 缓存为 2,147,483,648 字节（2.00 GiB），Bedrock-TriCore 为 17,408 字节，持久状态缩小 **123,361.9 倍**；1M 解码延迟为 Transformer **274.275 ms/token**、TriCore **3.794 ms/token**，单 Token 快 **72.30 倍**。所谓“基岩不可摧毁”，指的是地基不随上下文高度增长。
 
@@ -1057,33 +863,23 @@ Hebbian 矩阵只有一个全局衰减，却要同时满足两个互斥要求。
 
 标准因果自注意力让每个位置与之前所有位置比较，训练激活成本随 `O(L²)` 增长，推理缓存随 `O(L)` 增长。对于 `n_layers` 层、`n_heads` 个头、每头宽度 `d_head`、FP32 存储的解码器，传统 K/V 缓存为：
 
-```text
-M_{KV}(L) = 2 × n_{layers} × L × n_{heads} × d_{head} × 4 bytes.
-```
+<p align="center"><code>M_KV(L) = 2 × n_layers × L × n_heads × d_head × 4 bytes.</code></p>
 
 取 `n_layers=2`、`n_heads=4`、`d_head=32`（即 `d_model=128`）：
 
-```text
-M_{KV}(1,048,576) = 2 × 2 × 1,048,576 × 4 × 32 × 4 = 2,147,483,648 B = 2.00 GiB.
-```
+<p align="center"><code>M_KV(1,048,576) = 2 × 2 × 1,048,576 × 4 × 32 × 4 = 2,147,483,648 B = 2.00 GiB.</code></p>
 
 Bedrock-TriCore 的状态与 `L` 无关：
 
-```text
-M_{TriCore} = (D + H d_{head}^2 + H d_{head}) × 4 = (128 + 4 × 32^2 + 4 × 32) × 4 = 17,408 B.
-```
+<p align="center"><code>M_TriCore = (D + H d_head^2 + H d_head) × 4 = (128 + 4 × 32^2 + 4 × 32) × 4 = 17,408 B.</code></p>
 
 实测比值为：
 
-```text
-(M_{KV}(1,048,576))/(M_{TriCore}) = (2,147,483,648)/(17,408) = 123,361.9×.
-```
+<p align="center"><code>(M_KV(1,048,576))/(M_TriCore) = (2,147,483,648)/(17,408) = 123,361.9×.</code></p>
 
 当缓存大到足以主导内存带宽时，延迟也呈现同一趋势。128 Token 时，小缓存 Transformer 更快（`1.277` 对 `2.596 ms/token`）；实测交叉点在 `L=8,192`（`3.339` 对 `3.151 ms/token`）。到 1M 时 Transformer 为 **274.275 ms/token**，TriCore 仍为 **3.794 ms/token**：
 
-```text
-(274.275)/(3.794) = 72.30×.
-```
+<p align="center"><code>(274.275)/(3.794) = 72.30×.</code></p>
 
 **协议诚实性。** 这些数字来自单张 RTX 3060、batch=1、FP32 的真实 `torch.cuda.memory_allocated()` 差值（`empty_cache()` 之后）与真实缓存解码计时。Transformer 基线确实分配、写入并对完整因果 K/V 缓存做注意力，而不是按公式估算。65K 以下计时/预热步数为 32/8，65K–131K 为 16/4，262K–1M 为 8/2。这不是服务吞吐，不是多 batch 吞吐，也不代表 TriCore 训练更便宜。
 
@@ -1109,15 +905,11 @@ M_{TriCore} = (D + H d_{head}^2 + H d_{head}) × 4 = (128 + 4 × 32^2 + 4 × 32)
 
 线性循环记忆可以写成外积累加器。最朴素的 Hebbian 形式，逐头学习率 `η`、衰减 `λ`：
 
-```text
-F_t = λ F_{t-1} + η V_t K_{t-1}^{T}.
-```
+<p align="center"><code>F_t = λ Fₜ₋₁ + η V_t Kₜ₋₁ᵀ.</code></p>
 
-在查询键 `k` 上读取 `F_t k`。若同一个键被写入四次 `v^{(1)},...,v^{(4)}` 且不衰减（`λ=1`），读取结果是叠加：
+在查询键 `k` 上读取 `F_t k`。若同一个键被写入四次 `v⁽¹⁾,...,v⁽⁴⁾` 且不衰减（`λ=1`），读取结果是叠加：
 
-```text
-F_t k = η ∑_{r=1}^{4} v^{(r)} + crosstalk.
-```
+<p align="center"><code>F_t k = η ∑ᵣ₌₁⁴ v⁽ʳ⁾ + crosstalk.</code></p>
 
 写入最新值并不会移除旧值。降低 `λ` 最终能压小旧贡献，但它也同时衰减**所有**早期绑定，包括从未被覆写的静态变量。这就是衰减—干扰两难：
 
@@ -1130,15 +922,11 @@ F_t k = η ∑_{r=1}^{4} v^{(r)} + crosstalk.
 
 Delta 规则在快速权重更新中加入预测误差项：
 
-```text
-F_t = λ_f F_{t-1} + η_{eff,t}(V_t - F_{t-1}K_{t-1})K_{t-1}^{T}.
-```
+<p align="center"><code>F_t = λ_f Fₜ₋₁ + η_eff,t(V_t - Fₜ₋₁Kₜ₋₁)Kₜ₋₁ᵀ.</code></p>
 
-对于孤立的单位范数键 `k`，取 `λ_f=1`、`η_eff=1`、`F_{t-1}k=v_{old}`，新读取恰好是新值：
+对于孤立的单位范数键 `k`，取 `λ_f=1`、`η_eff=1`、`Fₜ₋₁k=v_old`，新读取恰好是新值：
 
-```text
-F_t k = v_{old} + (v_{new} - v_{old})(k^{T}k) = v_{new}.
-```
+<p align="center"><code>F_t k = v_old + (v_new - v_old)(kᵀk) = v_new.</code></p>
 
 这是全局衰减无法表达的定点擦除。V13 的提升集中在 hot 与 stale 两列，也正因如此：Delta 不是“忘得更快”，而是在写入替换值之前减掉被寻址的旧值。
 
@@ -1159,11 +947,7 @@ V13 三 seed、400 步实测：
 
 Engine I 提供另一半机制。其突触资格迹就是冻结的前一个键，迹条件读取为：
 
-```text
-q_t^{read} = normalize(e_t q_t + (1-e_t) prev_k_t),
-
-prev_k_{t+1} = normalize((1-e_t) prev_k_t + e_t K_t).
-```
+<p align="center"><code>q_t^read = normalize(e_t q_t + (1-e_t) prev_k_t),<br/>prev_kₜ₊₁ = normalize((1-e_t) prev_k_t + e_t K_t).</code></p>
 
 当中缀连接符处资格门关闭（`e_t ≈ 0`）时，读取解引用前一个实体，且 `prev_k` 不前进。于是下一个 Token 的值被写入该实体键，形成移位绑定 `F(alias)=var`。若迹的方向错误，两跳解引用就没有地址可循。V13 Fair No-Engine-I 保留 Delta 与可学习写路径，只关闭惊讶门，总体跌到 **37.89%**，说明没有稳定地址时，单靠擦除并不够。
 
@@ -1173,9 +957,7 @@ prev_k_{t+1} = normalize((1-e_t) prev_k_t + e_t K_t).
 
 给定固定预算 `L_max`，初始读取是第 1 跳，每次细化再走一跳。物理深度仍为一层；循环次数是计算预算，路由器学习如何给每一跳加权。Track 6 将四层事实乱序放置，中间隔 12 个对抗干扰 Token。单层 Full 使用 `max_loops=3`，达到 **100.00% 域内 / 100.00% 四倍间隔外推**，查询位置路由权重为：
 
-```text
-w^{hop} = [0.005, 0.004, 0.003, 0.988].
-```
+<p align="center"><code>w^hop = [0.005, 0.004, 0.003, 0.988].</code></p>
 
 路由器把 **98.8%** 的查询质量放在第 4 跳。两个更浅的预算并不是“部分解决”，而是塌缩到最后一个可用槽位，仍处于随机水平：
 
@@ -1335,216 +1117,57 @@ Track 7 是定义本次发布的实验。协议：seeds `42/100/2026`、**400 �
 
 #### 4.1 子空间对齐的规范寻址
 
-每个 Token 先归一化，再做投影：
+每个 Token 先归一化，再投影到共享归一化地址；`Q`、`K`、`V` 都是该地址的残差扰动，固定残差尺度为 `0.15`。跳路由器对“初始读取 + `L_max` 次细化”做 softmax：
 
-```text
-u_t = LN(x_t),      ũ_t = SiLU(W_u u_t + b_u).
-```
-
-共享地址投影并归一化：
-
-```text
-a_t = normalize(W_a u_t) ∈ ℝ^{H × d_{head}}.
-```
-
-`Q`、`K`、`V` 都是共享地址的残差扰动，固定残差尺度为 `0.15`：
-
-```text
-Q_t = normalize(a_t + 0.15 W_q u_t),
-```
-
-```text
-K_t = normalize(a_t + 0.15 W_k u_t),
-```
-
-```text
-V_t = a_t + 0.15 W_v u_t.
-```
-
-跳路由器对“初始读取 + `L_max` 次细化”做 softmax：
-
-```text
-w_t^{hop} = softmax(W_r u_t) ∈ ℝ^{L_{max}+1}.
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq1_addressing.png" alt="Equation 1: subspace-aligned canonical addressing, Q/K/V residuals and hop router" height="121"/></p>
 
 这里没有位置嵌入，也没有对序列位置的注意力。唯一按位置做 softmax 的是跳路由器，其支撑集是固定跳数预算而非 `L`。共享归一化地址是“检索出的桥接值可直接作为下一次查询”的关键：写入某地址的值，会在同一度量空间中被读回。
 
-**零先验角色发现。** 当 `autonomous_syntax=True` 且所有 Token 角色参数为 `None` 时，模型只计算序列内出现次数：
+**零先验角色发现。** 当 `autonomous_syntax=True` 且所有 Token 角色参数为 `None` 时，模型只计算序列内出现次数，并由此导出 `structural`、`delimiter`、`infix` 三个掩码，分别绑定到 Engine I 的三个门：
 
-```text
-f_t = ∑_{u=1}^{L} 1[x_t = x_u].
-```
-
-然后定义：
-
-```text
-structural_t = 1[f_t ≥ max(6, ⌊ L/10 ⌋)],
-```
-
-```text
-delimiter_t = structural_t ∧ 1[x_t = x_L],
-```
-
-```text
-infix_t = structural_t ∧ ¬delimiter_t ∧ 1[f_{t-1} ≤ F_{max}].
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq2_autonomous_freq.png" alt="Equation 2: zero-prior frequency counting and unsupervised syntax masks" height="172"/></p>
 
 `F_max` 即 `autonomous_entity_max_freq`：默认 **4**（V12），V13 为 **6**，因为一个热变量的“一次 LET + 四次 SET + 一次 NOP”共出现六次。`write_sep_mask = structural`；`elig_sep_mask = infix`；`reset_mask = delimiter`。掩码不增加参数，也不增加循环状态。对短封闭语法序列，发现复杂度为 `O(B L²)` 次 Token 相等比较；1M 剖面禁用该路径，单 Token 流式 API 也没有序列频率上下文。由于只依赖相等计数，对词表 ID 做任意置换，所有掩码逐位不变。
 
 #### 4.2 Engine I：惊讶门控坍缩、写保护、突触资格迹与无监督角色发现
 
-Engine I 有两个状态效应。第一个是逐维坍缩状态 `h_t`，初始为零。预测误差是变换后输入与上一坍缩状态的绝对差：
+Engine I 有两个状态效应。第一个是逐维坍缩状态 `h_t`，初始为零：预测误差是变换后输入与上一坍缩状态的绝对差，惊讶门是“学习投影 + 该误差”的 sigmoid，标量惊讶是门激活的均值；坍缩更新使用逐维学习衰减 `λ = sigmoid(base_decay_logit)`。第二个效应是写保护：逐头写 logit 与一条短 Token-to-gate 路径、以及发现的结构掩码组合，有效快速权重学习率只被衰减，绝不会被放大：
 
-```text
-e_t^{surp} = |ũ_t - h_{t-1}|,
-
-g_t = σ(W_s u_t + e_t^{surp}).
-```
-
-标量惊讶是门激活的均值：
-
-```text
-s_t = (1)/(D)∑_{j=1}^{D} g_{t,j}.
-```
-
-坍缩更新使用逐维学习衰减 `λ = sigmoid(base_decay_logit)` 与惊讶门：
-
-```text
-h_t = λ ⊙ (1 - 0.5 g_t) ⊙ h_{t-1} + g_t ⊙ ũ_t.
-```
-
-第二个效应是写保护。逐头写 logit 与一条短 Token-to-gate 路径、以及发现的结构掩码组合：
-
-```text
-ℓ_t^{w} = W_w u_t + 8 G_w(u_t) - 8 structural_t,
-```
-
-```text
-ω_t = σ(ℓ_t^{w} + s_t - 0.5).
-```
-
-有效快速权重学习率只被衰减，绝不会被放大：
-
-```text
-η_{eff,t} = η ⊙ ω_t,
-
-η = sigmoid(fast_lr_logit).
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq3_engine1_surprise.png" alt="Equation 3: Engine I surprise gating, write protection and state collapse" height="210"/></p>
 
 这就是 `enable_surprise_gate=False` 是**公平**消融的原因：它移除可学习写路径与惊讶调制，但不改变参数形状。该模式下实现取 `g_t=0.5`、`s_t=0.5`、`η_eff=1.0`、`decay=1.0`，且不应用学习写门。
 
-第三个效应是突触资格迹。资格门由并行的逐头 logit 产生，并在中缀连接符处关闭：
+第三个效应是突触资格迹。资格门由并行的逐头 logit 产生，并在中缀连接符处关闭。与写门不同，资格门**不**衰减快速权重写入，它控制“寻址哪个键”。迹条件查询、下一迹与分隔符重置为：
 
-```text
-ℓ_t^{e} = W_e u_t + 8 G_e(u_t) - 8 infix_t,
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq4_eligibility_trace.png" alt="Equation 4: synaptic eligibility trace latch and conditional cross-EQ read" height="90"/></p>
 
-```text
-e_t = σ(ℓ_t^{e} + s_t - 0.5).
-```
-
-与写门不同，资格门**不**衰减快速权重写入，它控制“寻址哪个键”。迹条件查询与下一迹为：
-
-```text
-q_t^{read} = normalize(e_t q_t + (1-e_t) prev_k_t),
-```
-
-```text
-prev_k_{t+1} = normalize((1-e_t) prev_k_t + e_t K_t).
-```
-
-当中缀连接符处门关闭（`e_t ≈ 0`），读取解引用冻结的前一个实体，`prev_k` 不前进；下一个 Token 的值就写入该实体键。这就是移位绑定 `F(alias)=var`，也是 `alias -> var -> lit` 能成立的方向。若采用“在 EQ 处打开”的约定，就会写 `F(EQ)=var`，无法支持该链。
-
-分隔符重置在迹更新之后执行：
-
-```text
-prev_k_{t+1} ← (1-r_t)prev_k_{t+1},
-     r_t = delimiter_t.
-```
-
-它在语句边界清零迹，不改变任何参数或张量形状。Track 6 显式启用，Track 5/7 自动发现。
+当中缀连接符处门关闭（`e_t ≈ 0`），读取解引用冻结的前一个实体，`prev_k` 不前进；下一个 Token 的值就写入该实体键。这就是移位绑定 `F(alias)=var`，也是 `alias -> var -> lit` 能成立的方向。若采用“在 EQ 处打开”的约定，就会写 `F(EQ)=var`，无法支持该链。分隔符重置在迹更新之后执行，它在语句边界清零迹，不改变任何参数或张量形状。Track 6 显式启用，Track 5/7 自动发现。
 
 #### 4.3 Engine II：因果移位 Delta 规则快速权重与加法 Hebbian 外积
 
-Engine II 为每个样本存一个 `[H, d_head, d_head]` 矩阵（初始为零）以及前一个键迹。`t=0` 不写入，首次读取为零。对 `t>0`，Delta 更新为：
+Engine II 为每个样本存一个 `[H, d_head, d_head]` 矩阵（初始为零）以及前一个键迹。`t=0` 不写入，首次读取为零。Engine II 所取代的加法 Hebbian 累加器把每次外积都叠加进同一矩阵，因此四轮热覆写后，陈旧值仍然叠加在被查询的键上：
 
-```text
-F_t = λ_f ⊙ F_{t-1}
-+ η_{eff,t} ⊙ (V_t - F_{t-1}K_{t-1})K_{t-1}^{T},
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq5_hebbian_conflict.png" alt="Equation 5: additive Hebbian accumulation and multi-round overwrite conflict" height="127"/></p>
 
-其中 `λ_f = sigmoid(fast_decay_logit)` 逐头独立。Hebbian 对照使用完全相同的衰减与学习率调度，但去掉擦除项：
+Delta 规则用预测误差擦除项取代加法外积，并使用逐头衰减 `λ_f = sigmoid(fast_decay_logit)`：
 
-```text
-F_t^{Hebb} = λ_f ⊙ F_{t-1}^{Hebb}
-+ η_{eff,t} ⊙ V_t K_{t-1}^{T}.
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq6_engine2_delta.png" alt="Equation 6: Engine II causal shifted delta rule and exact fixed-point erasure" height="97"/></p>
 
-读取发生在写入**之后**：
+读取 `r⁽⁰⁾ = Fₜ qₜ_read` 发生在写入**之后**。写入是因果移位的：使用 `prev_k = Kₜ₋₁`，不是 `K_t`。在 `[k_i, m_i, 0]` 块中绑定 `k_i -> m_i`；在 `[m_i, v_i, 0]` 块中绑定 `m_i -> v_i`。这个移位让位置 `t` 的值被写到位置 `t-1` 所见地址之下。
 
-```text
-r_t^{(0)} = F_t q_t^{read}.
-```
-
-写入是因果移位的：使用 `prev_k = K_{t-1}`，不是 `K_t`。在 `[k_i, m_i, 0]` 块中绑定 `k_i -> m_i`；在 `[m_i, v_i, 0]` 块中绑定 `m_i -> v_i`。这个移位让位置 `t` 的值被写到位置 `t-1` 所见地址之下。
-
-Delta 擦除有一个精确的条件恒等式。对孤立的单位范数键 `k`，取 `λ_f=1`、`η_eff=1`、`F_{t-1}k=v_{old}`：
-
-```text
-F_t k = F_{t-1}k + (v_{new} - F_{t-1}k)(k^{T}k) = v_{new}.
-```
-
-同样理想化下，Hebbian 对照会累加：
-
-```text
-F_t^{Hebb}k = v_{old} + v_{new},
-```
-
-因此读取无法区分最新值与陈旧值。真实键并不严格正交，会存在串扰；V13 用实测结果量化后果，而不是把理想恒等式当成现实。
+Delta 擦除有一个精确的条件恒等式。对孤立的单位范数键 `k`，取 `λ_f=1`、`η_eff=1`、`Fₜ₋₁k=v_old`，新读取恰好是新值；同样理想化下，Hebbian 对照会累加成 `v_old + v_new`，因此读取无法区分最新值与陈旧值。真实键并不严格正交，会存在串扰；V13 用实测结果量化后果，而不是把理想恒等式当成现实。
 
 **消融语义。** `enable_fast_weight=False` 完全跳过 Engine II；此时 `z=h_seq`，Engine III 没有记忆可读。开关只控制计算；无论开关如何，所有模块都会构造，因此五路消融参数量一致。
 
 #### 4.4 Engine III：零 `F_seq` 融合隐空间多跳突触平衡环
 
-Engine III 复用 `F_t` 作为隐查询空间，不创建第二份记忆，也不增加物理层。初始读取与累加为：
+Engine III 复用 `F_t` 作为隐查询空间，不创建第二份记忆，也不增加物理层。初始读取、固定跳细化、路由累加与读出为：
 
-```text
-r^{(0)} = r_t^{(0)},      r_{accum} = w_{t,0}^{hop} r^{(0)}.
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq7_engine3_multihop.png" alt="Equation 7: Engine III latent multi-hop equilibrium loop and soft-routed readout" height="181"/></p>
 
-对 `i = 0, ..., L_max-1`：
+`r⁽ⁱ⁾` 形状为 `[B, H, d_head, 1]`；`H_i` 形状为 `[1, H, d_head, d_head]`；归一化沿 `dim=-2` 做 L2。`max_loops=2` 时，初始读取是第 1 跳，第一次细化是第 2 跳，第二次细化是额外隐步；`max_loops=3` 时可到达四条边。循环次数固定；路由器改变权重，不改变深度。
 
-```text
-q^{(i+1)} = normalize(r^{(i)} + H_i r^{(i)}),
-```
-
-```text
-r^{(i+1)} = F_t q^{(i+1)},
-
-r_{accum} ← r_{accum} + w_{t,i+1}^{hop} r^{(i+1)}.
-```
-
-输出为路由累加：
-
-```text
-r_t^{out} = r_{accum}.
-```
-
-`r^{(i)}` 形状为 `[B, H, d_head, 1]`；`H_i` 形状为 `[1, H, d_head, d_head]`；归一化沿 `dim=-2` 做 L2。`max_loops=2` 时，初始读取是第 1 跳，第一次细化是第 2 跳，第二次细化是额外隐步；`max_loops=3` 时可到达四条边。循环次数固定；路由器改变权重，不改变深度。
-
-读出融合坍缩状态与路由记忆：
-
-```text
-z_t = h_t + W_o vec(r_t^{out}),
-```
-
-```text
-z_t ← z_t + s_t ⊙ MLP(LN(z_t)),
-
-y_t = x_t + LN(z_t).
-```
-
-当 `enable_adaptive_loop=False` 时，`r_t^out=r_t^(0)`，且跳过细化 MLP。当 `enable_fast_weight=False` 时，`z=h_seq`，Engine III 无记忆可读。
+当 `enable_adaptive_loop=False` 时，`r_out = r⁽⁰⁾`，且跳过细化 MLP。当 `enable_fast_weight=False` 时，`z=h_seq`，Engine III 无记忆可读。
 
 **为什么“零 `F_seq`”重要。** 朴素实现会物化 `[B, L, H, d_head, d_head]`，让每个位置读取自己的快速权重快照。V9 把 Engine III 融合进脚本化因果扫描：每个时间步使用当前 `F_t` 立即完成固定跳细化，只输出：
 
@@ -1565,14 +1188,7 @@ y_t = x_t + LN(z_t).
 | `prev_k` | `[B, H, d_head, 1]` | 每样本 4 × 32 = 128 | **512** | 突触资格迹 |
 | **总计** | — | **4,352 个 float** | **17,408** | **17.00 KiB / 样本** |
 
-```text
-M_{state} = (4D) [h] + (4Hd_{head}^2) [F_{mat}] + (4Hd_{head}) [prev_k]
-= 512 + 16,384 + 512 = 17,408 B.
-```
-
-```text
-17,408 B ÷ 1,024 = 17.00 KiB.
-```
+<p align="center"><img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/equations/eq8_state_cache.png" alt="Equation 8: constant O(1) state accounting versus Transformer KV cache" height="145"/></p>
 
 公式随配置变化；**17.00 KiB 是参考配置的数值**，不是任意模型宽度的普适常数。对 V13 的 `D=64`、`H=4`、`d_head=16`，同一公式给出 `256 + 4,096 + 256 = 4,608 B = 4.50 KiB` 每层。两者都保持对 `L` 的 O(1)，只是常数不同。本文所有 17.00 KiB 旗舰数字与 1M 对比，均指 CUDA 剖面使用的 `D=128` 参考配置。
 
@@ -1601,10 +1217,10 @@ M_{state} = (4D) [h] + (4Hd_{head}^2) [F_{mat}] + (4Hd_{head}) [prev_k]
    │ 写门 ω_t           │                     ▼                              │
    │ 资格门 e_t         │          ┌──────────────────────┐                    │
    └─────────┬──────────┘          │ ENGINE II            │                    │
-             │                     │ F_t = λ F_{t-1}      │                    │
+             │                     │ F_t = λ Fₜ₋₁         │                    │
              │                     │   + η_eff (V_t -     │                    │
-             │                     │   F_{t-1}K_{t-1})    │                    │
-             │                     │   K_{t-1}^T          │                    │
+             │                     │   Fₜ₋₁Kₜ₋₁)          │                    │
+             │                     │   Kₜ₋₁ᵀ              │                    │
              │                     │ 读取 q_t^read        │                    │
              │                     └──────────┬───────────┘                    │
              │                                │                                │
@@ -1685,7 +1301,7 @@ bedrock-tricore/
 ├── run_v13_definitive.py        # V13 可续跑 Delta/Hebbian/Fair/Transformer
 ├── demo_showcase.py             # 一条命令的流式演示，无需 checkpoint
 ├── requirements.txt             # torch、numpy、matplotlib
-├── pyproject.toml               # 可安装 bedrock-tricore 1.6.1，MIT
+├── pyproject.toml               # 可安装 bedrock-tricore 1.6.2，MIT
 ├── LICENSE                      # MIT
 ├── .gitignore                   # 缓存、虚拟环境、checkpoint；保留报告/PNG
 ├── SPEC.md                      # 原始算子规范
@@ -1694,7 +1310,7 @@ bedrock-tricore/
 └── README.md                    # 本双语旗舰文档
 ```
 
-导入包名为 `tricore`，分发名为 `bedrock-tricore`。`pyproject.toml` 声明 `bedrock-tricore==1.6.1`、Python `>=3.10`，运行依赖 `torch>=2.0`、`numpy>=1.24`、`matplotlib>=3.7`。
+导入包名为 `tricore`，分发名为 `bedrock-tricore`。`pyproject.toml` 声明 `bedrock-tricore==1.6.2`、Python `>=3.10`，运行依赖 `torch>=2.0`、`numpy>=1.24`、`matplotlib>=3.7`。
 
 ---
 
@@ -1863,7 +1479,7 @@ sample_train_batch, iter_val_batches, vocab_size = load_real_python_corpus_batch
 
 1. **三张量定律。** 每层持久解码状态恰好是 `(h, F_mat, prev_k)`。状态中不存在 KV 缓存、隐藏位置表或逐 Token 档案。
 2. **恒定字节定律。** 固定配置下，状态字节数与 `L` 无关。取 `D=128,H=4,d_head=32`，恰好为 17,408 B = 17.00 KiB。
-3. **因果定律。** 第 `t` 步快速权重写入使用 `K_{t-1}` 与 `V_t`；未来 Token 不能影响更早的读取。
+3. **因果定律。** 第 `t` 步快速权重写入使用 `Kₜ₋₁` 与 `V_t`；未来 Token 不能影响更早的读取。
 4. **先写后读定律。** `r_t^(0) = F_t q_t^read`；一个 Token 不能读取尚未包含自身因果写入的矩阵状态。
 5. **共享地址定律。** `Q`、`K`、`V` 都是同一归一化 `a_t` 的残差扰动；检索出的桥接值因此是同一度量空间中的合法查询。
 6. **无位置注意力定律。** 没有位置嵌入，也没有对序列位置的 softmax。唯一的按位置 softmax 只发生在固定跳数预算上。
@@ -1908,7 +1524,7 @@ Bedrock-TriCore 最准确的理解是**一次受控的设计权衡演示**：用
 **Release focus.** V13 replaces V12's single overwrite with a stateful mutation task that cannot be solved by lowering a global Hebbian decay. Every sequence contains four shuffled declarations, two **static** variables assigned once at the beginning, two **hot** variables overwritten for **four cyclic rounds**, six adversarial NOPs, and four alias returns: 24 five-token statements, **120 tokens**, four supervised queries, and a four-way chance level of **25.0%**.
 
 1. **Static long-term retention.** Static bindings must survive every later mutation round, NOP, and query. High fast-weight decay preserves them; low decay erases them.
-2. **Multi-round hot mutation.** The same hot key is overwritten four times. Hebbian accumulation retains old values; Delta's `V_t - F_{t-1}K_{t-1}` erase term removes the addressed old value before writing the new one.
+2. **Multi-round hot mutation.** The same hot key is overwritten four times. Hebbian accumulation retains old values; Delta's `V_t - Fₜ₋₁Kₜ₋₁` erase term removes the addressed old value before writing the new one.
 3. **Decay-Interference Dilemma.** Hebbian has one global decay for both requirements: high decay preserves static bindings but accumulates all four hot values, while low decay preserves the newest hot value but loses the early static bindings. Delta keeps decay high and erases pointwise at each key.
 4. **No token-ID prior.** All three TriCore arms use `autonomous_syntax=True` with `separator_token=None`, `syntax_tokens=None`, and `reset_trace_tokens=None`. A hot variable occurs six times (one LET, four SETs, one NOP), so V13 raises `autonomous_entity_max_freq` from 4 to 6; the V12 default remains 4. The rule is still frequency-only and permutation-invariant.
 5. **Measured three-seed comparison.** Delta, Hebbian, Fair No-Engine-I, and a vanilla two-layer Transformer share batches, optimizer budget, and 400 steps.
@@ -1937,7 +1553,7 @@ Per-seed overall accuracy: Delta `99.84/99.49/98.55%`; Hebbian `36.99/66.68/36.9
 
 1. **Zero-prior syntax discovery.** With `autonomous_syntax=True` and `separator_token=None`, `syntax_tokens=None`, `reset_trace_tokens=None`, the LM labels structural tokens from **within-sequence frequency** and **preceding-token frequency** alone. No vocabulary ID is passed. A random bijection of all 64 token IDs leaves the EQ/SEMI masks bit-identical.
 2. **Correct eligibility direction.** A closed eligibility gate now reads the frozen preceding key (`q_read = normalize(e q_t + (1-e) prev_k)`) and also stops `prev_k` from advancing. At `alias EQ var`, the next value is therefore written at the alias key: `F(alias)=var`. This is the shifted binding that makes the two-hop `alias -> var -> lit` dereference possible.
-3. **Delta rule and Track 7.** `enable_delta_rule` selects the erase term `V_t - F_{t-1}K_{t-1}`; `False` uses the identical decay/learning-rate schedule with a plain Hebbian outer product. Track 7 overwrites a live variable and tests whether the model returns the **new** literal rather than the stale one.
+3. **Delta rule and Track 7.** `enable_delta_rule` selects the erase term `V_t - Fₜ₋₁Kₜ₋₁`; `False` uses the identical decay/learning-rate schedule with a plain Hebbian outer product. Track 7 overwrites a live variable and tests whether the model returns the **new** literal rather than the stale one.
 4. **1M-token CUDA profile.** Real `torch.cuda.memory_allocated()` deltas and real cached-decoder latency are measured for both models at `L=128..1,048,576`, not estimated from shapes.
 5. **2x3 apex figure.** `results/tricore_v12_apex.png` and the master `results/tricore_vs_transformer.png` summarize zero-prior Track 5, Track 7, memory, and latency.
 
@@ -2172,9 +1788,7 @@ K_t = normalize(a_t + 0.15 W_k u_t),
 V_t = a_t + 0.15 W_v u_t
 ```
 
-```text
-w_t^{hop} = softmax(W_r u_t)
-```
+<p align="center"><code>w_t^hop = softmax(W_r u_t)</code></p>
 
 `Q/K/V` have shape `[B, L, H, d_head]`; the hop router has shape `[B, L, L_max+1]`. All L2 normalization is over the head dimension. The shared normalized address `a_t` keeps a retrieved bridge compatible with the next query.
 
@@ -2182,22 +1796,13 @@ w_t^{hop} = softmax(W_r u_t)
 
 Initial state: `h_0 = 0`, shape `[B, D]`.
 
-```text
-e_t = |ũ_t - h_{t-1}|,      g_t = σ(W_s u_t + e_t)
-```
+<p align="center"><code>e_t = |ũ_t - hₜ₋₁|,      g_t = σ(W_s u_t + e_t)</code></p>
 
-```text
-s_t = (1)/(D)∑_j g_{t,j},
-ω_t = σ(W_g u_t + s_t - 0.5)
-```
+<p align="center"><code>s_t = (1)/(D)∑_j gₜ,ⱼ,<br/>ω_t = σ(W_g u_t + s_t - 0.5)</code></p>
 
-```text
-η_{eff,t} = η ⊙ ω_t
-```
+<p align="center"><code>η_eff,t = η ⊙ ω_t</code></p>
 
-```text
-h_t = λ ⊙ (1 - 0.5 g_t) ⊙ h_{t-1} + g_t ⊙ ũ_t
-```
+<p align="center"><code>h_t = λ ⊙ (1 - 0.5 g_t) ⊙ hₜ₋₁ + g_t ⊙ ũ_t</code></p>
 
 `lambda` is `sigmoid(base_decay_logit)` with shape `[D]`; `eta` is `sigmoid(fast_lr_logit)` with shape `[1, H, 1, 1]`. The write gate is per head and shared across that head's matrix. When `enable_surprise_gate=False`, the block uses `g_t=0.5`, `s_t=0.5`, `eta_eff=1.0`, `decay=1.0`, and no learned write gate.
 
@@ -2207,48 +1812,31 @@ Initial state: `F_0 = 0`, shape `[B, H, d_head, d_head]`; `prev_k = 0`, shape `[
 
 For `t > 0`:
 
-```text
-F_t = λ_f ⊙ F_{t-1}
-+ η_{eff,t} ⊙ (V_t - F_{t-1}K_{t-1})K_{t-1}^{T}
-```
+<p align="center"><code>F_t = λ_f ⊙ Fₜ₋₁<br/>+ η_eff,t ⊙ (V_t - Fₜ₋₁Kₜ₋₁)Kₜ₋₁ᵀ</code></p>
 
 The read happens after the write:
 
-```text
-r_t^{(0)} = F_t Q_t
-```
+<p align="center"><code>r_t⁽⁰⁾ = F_t Q_t</code></p>
 
 At `t=0`, no write occurs and the first read is zero. At the end of each step, `prev_k = K_t`, so the next write binds the previous key to the current value. The write is causal and shifted: in a `[k_i, m_i, 0]` block it binds `k_i -> m_i`; in a `[m_i, v_i, 0]` block it binds `m_i -> v_i`.
 
 ### 2.4 Engine III — latent multi-hop synaptic equilibrium loop
 
-```text
-r^{(0)} = r_t^{(0)},      r_{accum} = w_{t,0}^{hop} r^{(0)}
-```
+<p align="center"><code>r⁽⁰⁾ = r_t⁽⁰⁾,      r_accum = wₜ,₀^hop r⁽⁰⁾</code></p>
 
-For `i = 0, \ldots, L_{\max}-1`:
+For `i = 0, …, L_max-1`:
 
-```text
-q^{(i+1)} = normalize(r^{(i)} + H_i r^{(i)})
-```
+<p align="center"><code>q⁽ⁱ⁺¹⁾ = normalize(r⁽ⁱ⁾ + H_i r⁽ⁱ⁾)</code></p>
 
-```text
-r^{(i+1)} = F_t q^{(i+1)},
-r_{accum} ← r_{accum} + w_{t,i+1}^{hop} r^{(i+1)}
-```
+<p align="center"><code>r⁽ⁱ⁺¹⁾ = F_t q⁽ⁱ⁺¹⁾,<br/>r_accum ← r_accum + wₜ,ᵢ₊₁^hop r⁽ⁱ⁺¹⁾</code></p>
 
 `r^(i)` is `[B, H, d_head, 1]`; `H_i` is `[1, H, d_head, d_head]`; normalization is L2 over `dim=-2`. With `max_loops=2`, the initial read is hop 1, the first re-query is hop 2, and the second re-query is an extra latent refinement. The loop count is fixed; the router changes weights, not depth.
 
 ### 2.5 Readout
 
-```text
-z_t = h_t + W_o vec(r_t^{out})
-```
+<p align="center"><code>z_t = h_t + W_o vec(r_t^out)</code></p>
 
-```text
-z_t ← z_t + s_t ⊙ MLP(LN(z_t)),
-y_t = x_t + LN(z_t)
-```
+<p align="center"><code>z_t ← z_t + s_t ⊙ MLP(LN(z_t)),<br/>y_t = x_t + LN(z_t)</code></p>
 
 When `enable_adaptive_loop=False`, `r_t^out = r_t^(0)` and the refinement MLP is skipped. When `enable_fast_weight=False`, Engine II is skipped, `z=h_seq`, and Engine III has no memory to read. All modules are constructed regardless of flags, so all TriCore variants report the same parameter count.
 
@@ -2781,8 +2369,8 @@ Issues and pull requests are welcome. Preserve these invariants:
 
 1. **No attention over tokens.** No softmax may mix sequence positions. The only softmax is the hop router over `max_loops + 1` slots.
 2. **O(1) state.** `h`, `F_mat`, and `prev_k` shapes must be independent of `L`.
-3. **Causal shifted write.** Engine II binds `K_{t-1}` to `V_t`; the read uses `Q_t` after the write.
-4. **Delta rule.** The write is `(V_t - F_{t-1}K_{t-1})K_{t-1}^T`, not a plain Hebbian outer product.
+3. **Causal shifted write.** Engine II binds `Kₜ₋₁` to `V_t`; the read uses `Q_t` after the write.
+4. **Delta rule.** The write is `(V_t - Fₜ₋₁Kₜ₋₁)Kₜ₋₁ᵀ`, not a plain Hebbian outer product.
 5. **Per-head matrices.** `F_mat` is `[B, H, d_head, d_head]`.
 6. **Canonical address.** Q/K/V retain the shared normalized address plus residual projections.
 7. **Write protection.** Engine I retains a learned write gate; `enable_surprise_gate=False` is the unconditional-delta ablation.
