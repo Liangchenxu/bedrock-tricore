@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>Bedrock-TriCore (<code>bedrock-tricore</code> v1.6.0)</h1>
+  <h1>Bedrock-TriCore (<code>bedrock-tricore</code> v1.6.1)</h1>
   <h3><i>An Attention-Free, Constant-State O(1) Sequence Operator with Causal Delta-Rule Fast Weights and Latent Multi-Hop Chaining</i></h3>
   <p><b>恒定状态 O(1) 无注意力序列算子：因果 Delta 规则快权重、突触资格迹与隐空间多跳循环</b></p>
 
@@ -30,6 +30,10 @@
 >
 > **公式渲染。** 公式使用 Unicode 纯文本表示，以确保在 GitHub 与 PyPI 上都能正确显示；PyPI 不支持 LaTeX 或 MathJax。
 
+> **Release 1.6.1.** Packaging-only patch: the PyPI long description now uses Unicode plain-text formulas. No model, API, benchmark, or numerical result changed.
+>
+> **1.6.1 发布说明。** 仅打包修正：PyPI 长描述改用 Unicode 纯文本公式；模型、API、基准与数值结果均未改变。
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/tricore_vs_transformer.png" alt="Bedrock-TriCore V13 six-panel panorama: mutation accuracy, static/hot retention, stale confusion, 1M-token memory, decode latency, and multi-hop depth" width="100%">
 </p>
@@ -40,7 +44,7 @@
 
 ## Part I: English Flagship Specification
 
-> **Reading contract.** Part I is the current, self-contained technical specification for `bedrock-tricore` v1.6.0. Part II is its full Chinese counterpart. Part III is an append-only archive: every V4–V13 release note, table, correction, and self-audit is preserved verbatim so that no historical claim is silently rewritten. Where an older section and this specification disagree, the newer measured result and its stated scope govern.
+> **Reading contract.** Part I is the current, self-contained technical specification for `bedrock-tricore` v1.6.1. Part II is its full Chinese counterpart. Part III is an append-only archive: every V4–V13 release note, table, correction, and self-audit is preserved verbatim so that no historical claim is silently rewritten. Where an older section and this specification disagree, the newer measured result and its stated scope govern.
 
 ### Contents of Part I
 
@@ -751,7 +755,7 @@ bedrock-tricore/
 ├── run_v13_definitive.py        # V13 resumable Delta/Hebbian/Fair/Transformer
 ├── demo_showcase.py             # one-command streaming demo, no checkpoint
 ├── requirements.txt             # torch, numpy, matplotlib
-├── pyproject.toml               # installable bedrock-tricore 1.6.0, MIT
+├── pyproject.toml               # installable bedrock-tricore 1.6.1, MIT
 ├── LICENSE                      # MIT
 ├── .gitignore                   # caches, venvs, checkpoints; keeps reports/PNGs
 ├── SPEC.md                      # original operator specification
@@ -760,7 +764,7 @@ bedrock-tricore/
 └── README.md                    # this bilingual flagship document
 ```
 
-The import package is `tricore`; the distribution name is `bedrock-tricore`. `pyproject.toml` declares `bedrock-tricore==1.6.0`, Python `>=3.10`, and runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`.
+The import package is `tricore`; the distribution name is `bedrock-tricore`. `pyproject.toml` declares `bedrock-tricore==1.6.1`, Python `>=3.10`, and runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`.
 
 ---
 
@@ -970,7 +974,7 @@ Bedrock-TriCore is best understood as a **controlled demonstration of a design t
 
 ## Part II: 中文旗舰技术白皮书（完整版）
 
-> **阅读契约。** 本部分是 `bedrock-tricore` v1.6.0 当前、自洽、完整的中文技术规范，与 Part I 英文旗舰版逐章对等。Part III 是只追加、不覆盖的历史档案：V4 至 V13 的每一份发布记录、表格、修正与自我审计都原样保留，任何旧结论都不会被静默改写。若旧章节与本文冲突，以更新的实测结果及其明确声明的适用范围为准。
+> **阅读契约。** 本部分是 `bedrock-tricore` v1.6.1 当前、自洽、完整的中文技术规范，与 Part I 英文旗舰版逐章对等。Part III 是只追加、不覆盖的历史档案：V4 至 V13 的每一份发布记录、表格、修正与自我审计都原样保留，任何旧结论都不会被静默改写。若旧章节与本文冲突，以更新的实测结果及其明确声明的适用范围为准。
 
 ### 本部分目录
 
@@ -1681,7 +1685,7 @@ bedrock-tricore/
 ├── run_v13_definitive.py        # V13 可续跑 Delta/Hebbian/Fair/Transformer
 ├── demo_showcase.py             # 一条命令的流式演示，无需 checkpoint
 ├── requirements.txt             # torch、numpy、matplotlib
-├── pyproject.toml               # 可安装 bedrock-tricore 1.6.0，MIT
+├── pyproject.toml               # 可安装 bedrock-tricore 1.6.1，MIT
 ├── LICENSE                      # MIT
 ├── .gitignore                   # 缓存、虚拟环境、checkpoint；保留报告/PNG
 ├── SPEC.md                      # 原始算子规范
@@ -1690,7 +1694,7 @@ bedrock-tricore/
 └── README.md                    # 本双语旗舰文档
 ```
 
-导入包名为 `tricore`，分发名为 `bedrock-tricore`。`pyproject.toml` 声明 `bedrock-tricore==1.6.0`、Python `>=3.10`，运行依赖 `torch>=2.0`、`numpy>=1.24`、`matplotlib>=3.7`。
+导入包名为 `tricore`，分发名为 `bedrock-tricore`。`pyproject.toml` 声明 `bedrock-tricore==1.6.1`、Python `>=3.10`，运行依赖 `torch>=2.0`、`numpy>=1.24`、`matplotlib>=3.7`。
 
 ---
 
