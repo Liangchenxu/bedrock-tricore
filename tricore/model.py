@@ -1,7 +1,23 @@
 from typing import Optional, Tuple
+import hashlib
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+def _state_digest(states) -> str:
+    """Stable SHA-256 over state tensor dtype, shape, and canonical values."""
+    digest = hashlib.sha256()
+    for layer_state in states:
+        for tensor in layer_state:
+            t = tensor.detach().cpu().contiguous()
+            digest.update(str(t.dtype).encode("ascii"))
+            digest.update(str(tuple(t.shape)).encode("ascii"))
+            if t.dtype == torch.bfloat16:
+                t = t.float()
+            digest.update(t.numpy().tobytes())
+    return digest.hexdigest()
+
 
 
 @torch.jit.script
@@ -316,6 +332,63 @@ class TriCoreBlock(nn.Module):
         if squeeze_seq:
             out_t = out_t.unsqueeze(1)
         return out_t, surprise_scalar.squeeze(-1), (h_new, F_new, prev_k_new)
+
+    def forward_with_state(
+        self,
+        x: torch.Tensor,
+        state: Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = None,
+        step_offset: int = 0,
+        enable_surprise_gate: bool = True,
+        enable_fast_weight: bool = True,
+        enable_adaptive_loop: bool = True,
+        separator_mask: torch.Tensor = None,
+        reset_mask: Optional[torch.Tensor] = None,
+        enable_delta_rule: bool = True,
+        gate_role_logits: Optional[torch.Tensor] = None,
+    ):
+        """Chunk-local scan with an optional carried (h, F_mat, prev_k) state.
+
+        A non-None state means this chunk starts at global time ``step_offset > 0``;
+        its local t=0 must therefore perform the normal Delta/Hebbian write using
+        the carried ``prev_k``.  Only a true sequence start (state is None and
+        step_offset == 0) skips the first write.
+        """
+        B, L, _ = x.shape
+        if state is None:
+            state = self.init_state(B, x.device, x.dtype)
+        if L == 0:
+            return x, x.new_zeros((B, 0)), state
+
+        outputs = []
+        surprises = []
+        for t in range(L):
+            if separator_mask is None:
+                sep_t = None
+            elif isinstance(separator_mask, tuple):
+                sep_t = tuple(mask[:, t] for mask in separator_mask)
+            else:
+                sep_t = separator_mask[:, t]
+            reset_t = None if reset_mask is None else reset_mask[:, t]
+            role_t = None if gate_role_logits is None else gate_role_logits[:, t]
+            out_t, surprise_t, state = self.forward_step(
+                x[:, t],
+                state,
+                step_idx=step_offset + t,
+                enable_surprise_gate=enable_surprise_gate,
+                enable_fast_weight=enable_fast_weight,
+                enable_adaptive_loop=enable_adaptive_loop,
+                separator_mask=sep_t,
+                reset_mask=reset_t,
+                enable_delta_rule=enable_delta_rule,
+                gate_role_logits=role_t,
+            )
+            outputs.append(out_t)
+            surprises.append(surprise_t)
+        return (
+            torch.stack(outputs, dim=1),
+            torch.stack(surprises, dim=1),
+            state,
+        )
 
 
     def forward(
@@ -639,11 +712,13 @@ class TriCoreLM(nn.Module):
         param_dtype = self.embedding.weight.dtype
         states = self.init_state(B, device=device, dtype=param_dtype)
 
-        surprise_steps = []
-        logits_t = None
-        for t in range(L_prompt):
-            logits_t, s_t, states = self.forward_step(prompt_ids[:, t], states, step_idx=t)
-            surprise_steps.append(s_t)
+        if L_prompt == 0:
+            raise ValueError("prompt_ids must contain at least one token")
+        prefill_logits, prefill_surprise, states = self.forward_chunked(
+            prompt_ids, chunk_size=256, states=states, return_states=True
+        )
+        logits_t = prefill_logits[:, -1]
+        surprise_steps = [prefill_surprise[:, t] for t in range(L_prompt)]
 
         generated = [prompt_ids]
         for step in range(max_new_tokens):
@@ -766,6 +841,168 @@ class TriCoreLM(nn.Module):
             "state_bytes_per_sample_fp32": state_bytes_per_sample,
             "state_bytes_per_sample_bf16": state_bytes_per_sample // 2,
         }
+
+    def forward_chunked(
+        self,
+        idx: torch.Tensor,
+        chunk_size: int = 256,
+        states=None,
+        return_states: bool = False,
+    ):
+        """Stateful chunked prefill: exact streaming equivalence with bounded activations."""
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        B, L = idx.shape
+        param_dtype = self.embedding.weight.dtype
+        if states is None:
+            states = self.init_state(B, idx.device, param_dtype)
+        separator_mask, reset_mask = self._build_masks(idx)
+        role_logits = (
+            self.gate_role_table(idx).view(
+                B, L, self.layers[0].n_heads, 2, 1, 1
+            )
+            * self.gate_role_gain
+        )
+
+        def slice_mask(mask, start, end):
+            if mask is None:
+                return None
+            if isinstance(mask, tuple):
+                return tuple(part[:, start:end] for part in mask)
+            return mask[:, start:end]
+
+        current_states = states
+        logits_chunks = []
+        surprise_chunks = []
+        for start in range(0, L, chunk_size):
+            end = min(start + chunk_size, L)
+            x = self.embedding(idx[:, start:end])
+            sep_chunk = slice_mask(separator_mask, start, end)
+            reset_chunk = None if reset_mask is None else reset_mask[:, start:end]
+            role_chunk = role_logits[:, start:end]
+            layer_surprises = []
+            new_states = []
+            for layer_idx, layer in enumerate(self.layers):
+                x, s_chunk, next_state = layer.forward_with_state(
+                    x,
+                    current_states[layer_idx],
+                    step_offset=start,
+                    enable_surprise_gate=self.enable_surprise_gate,
+                    enable_fast_weight=self.enable_fast_weight,
+                    enable_adaptive_loop=self.enable_adaptive_loop,
+                    separator_mask=sep_chunk,
+                    reset_mask=reset_chunk,
+                    enable_delta_rule=self.enable_delta_rule,
+                    gate_role_logits=role_chunk,
+                )
+                new_states.append(next_state)
+                layer_surprises.append(s_chunk)
+            logits_chunks.append(self.lm_head(self.final_norm(x)))
+            surprise_chunks.append(torch.stack(layer_surprises, dim=0).mean(dim=0))
+            current_states = new_states
+
+        if L == 0:
+            logits = self.lm_head(self.final_norm(self.embedding(idx)))
+            surprise = idx.new_zeros((B, 0), dtype=param_dtype)
+        else:
+            logits = torch.cat(logits_chunks, dim=1)
+            surprise = torch.cat(surprise_chunks, dim=1)
+        if return_states:
+            return logits, surprise, current_states
+        return logits, surprise
+
+    def save_state_snapshot(self, states, path=None, compress_bf16: bool = False) -> dict:
+        """Serialize a ((h, F_mat, prev_k), ...) state with arch metadata and SHA-256."""
+        if not states:
+            raise ValueError("states must contain at least one layer")
+        snapshot_layers = []
+        for layer_state in states:
+            if len(layer_state) != 3:
+                raise ValueError("each layer state must be (h, F_mat, prev_k)")
+            converted = []
+            for tensor in layer_state:
+                t = tensor.detach().cpu().contiguous()
+                converted.append(
+                    t.to(torch.bfloat16) if compress_bf16 else t.to(torch.float32)
+                )
+            snapshot_layers.append(tuple(converted))
+
+        batch_size = snapshot_layers[0][0].shape[0]
+        state_bytes = sum(
+            tensor.numel() * tensor.element_size()
+            for layer_state in snapshot_layers
+            for tensor in layer_state
+        )
+        snapshot = {
+            "format": "bedrock-tricore-state-snapshot",
+            "version": "1.6.4",
+            "arch": {
+                "vocab_size": self.lm_head.out_features,
+                "d_model": self.embedding.embedding_dim,
+                "n_layers": len(self.layers),
+                "n_heads": self.layers[0].n_heads,
+                "d_head": self.layers[0].d_head,
+                "max_loops": self.layers[0].max_loops,
+            },
+            "dtype": "bfloat16" if compress_bf16 else "float32",
+            "compress_bf16": bool(compress_bf16),
+            "state_bytes": state_bytes,
+            "state_bytes_per_sample": state_bytes // max(batch_size, 1),
+            "layers": snapshot_layers,
+            "sha256": _state_digest(snapshot_layers),
+        }
+        if path is not None:
+            torch.save(snapshot, path)
+        return snapshot
+
+    def load_state_snapshot(self, snapshot_or_path, device: str = "cpu", dtype: torch.dtype = torch.float32):
+        """Load and integrity-check a state snapshot, returning portable layer states."""
+        if isinstance(snapshot_or_path, dict):
+            snapshot = snapshot_or_path
+        else:
+            try:
+                snapshot = torch.load(
+                    snapshot_or_path, map_location="cpu", weights_only=False
+                )
+            except TypeError:
+                snapshot = torch.load(snapshot_or_path, map_location="cpu")
+
+        if snapshot.get("format") != "bedrock-tricore-state-snapshot":
+            raise ValueError("not a bedrock-tricore state snapshot")
+        expected_arch = {
+            "d_model": self.embedding.embedding_dim,
+            "n_layers": len(self.layers),
+            "n_heads": self.layers[0].n_heads,
+            "d_head": self.layers[0].d_head,
+            "max_loops": self.layers[0].max_loops,
+        }
+        for key, expected in expected_arch.items():
+            if int(snapshot.get("arch", {}).get(key, -1)) != int(expected):
+                raise ValueError(f"snapshot architecture mismatch on {key}")
+        layers = snapshot.get("layers")
+        if not isinstance(layers, (list, tuple)) or len(layers) != len(self.layers):
+            raise ValueError("snapshot layer count does not match the model")
+        if _state_digest(layers) != snapshot.get("sha256"):
+            raise ValueError("snapshot SHA-256 integrity check failed")
+
+        batch_size = layers[0][0].shape[0]
+        restored = []
+        for layer_idx, (layer_state, layer) in enumerate(zip(layers, self.layers)):
+            if len(layer_state) != 3:
+                raise ValueError("each snapshot layer must contain (h, F_mat, prev_k)")
+            templates = layer.init_state(batch_size, torch.device("cpu"), dtype)
+            for tensor, template in zip(layer_state, templates):
+                if tuple(tensor.shape) != tuple(template.shape):
+                    raise ValueError(
+                        f"snapshot tensor shape mismatch at layer {layer_idx}"
+                    )
+            restored.append(
+                tuple(
+                    tensor.detach().to(device=device, dtype=dtype)
+                    for tensor in layer_state
+                )
+            )
+        return restored
 
 
 class BaselineTransformerLM(nn.Module):

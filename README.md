@@ -1,12 +1,13 @@
 <div align="center">
-  <h1>Bedrock-TriCore (<code>bedrock-tricore</code> v1.6.3)</h1>
+  <h1>Bedrock-TriCore (<code>bedrock-tricore</code> v1.6.4)</h1>
   <h3><i>An Attention-Free, Constant-State O(1) Sequence Operator with Causal Delta-Rule Fast Weights and Latent Multi-Hop Chaining</i></h3>
   <p><b>恒定状态 O(1) 无注意力序列算子：因果 Delta 规则快权重、突触资格迹与隐空间多跳循环</b></p>
 
   <p>
     <a href="#part-i-english-flagship-specification"><b>English Flagship Specification (Full)</b></a> •
     <a href="#part-ii-中文旗舰技术白皮书完整版"><b>中文旗舰技术白皮书（完整版）</b></a> •
-    <a href="#part-iii-complete-historical-evolution-ledger-v4--v13"><b>Historical Evolution Ledger (V4 → V13)</b></a>
+    <a href="#part-iii-complete-historical-evolution-ledger-v4--v13"><b>Historical Evolution Ledger (V4 → V13)</b></a> •
+    <a href="https://github.com/Liangchenxu/bedrock-tricore/blob/main/docs/versions/INDEX.md"><b>Version Vault</b></a>
   </p>
 </div>
 
@@ -18,7 +19,7 @@
   <a href="https://pytorch.org/docs/stable/jit.html"><img alt="TorchScript JIT fused" src="https://img.shields.io/badge/TorchScript-JIT%20Fused-EE4C2C?logo=pytorch&logoColor=white"></a>
   <img alt="O(1) state 17.00 KiB" src="https://img.shields.io/badge/O(1)%20State-17.00%20KiB-0B8457">
   <img alt="1M CUDA scaling 123,361.9x" src="https://img.shields.io/badge/1M%20CUDA-123%2C361.9%C3%97-6C3483">
-  <a href="#8-verification"><img alt="Tests 12/12 passing" src="https://img.shields.io/badge/Tests-12%2F12%20Passing-brightgreen"></a>
+  <a href="#8-verification"><img alt="Tests 14/14 passing" src="https://img.shields.io/badge/Tests-14%2F14%20Passing-brightgreen"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-green"></a>
 </p>
 
@@ -30,9 +31,9 @@
 >
 > **公式渲染。** 八组核心公式以 300 DPI Computer Modern 高清 PNG 内嵌自本仓库，确保 GitHub 与 PyPI 渲染完全一致；PyPI 不支持 LaTeX 或 MathJax。其余公式均以纯 Unicode 文本书写。
 
-> **Release 1.6.3.** Adds native O(1)-state `TriCoreLM.generate()` autoregressive decoding, `TriCoreLM.inspect_telemetry()` synaptic probes, and a 220-DPI vector architecture blueprint. No benchmark result changed; V4–V13 historical records remain intact.
+> **Release 1.6.4.** Adds stateful chunked prefill (`forward_chunked`), FP32/BF16 17 KiB state snapshots with SHA-256, chunked `generate()` prefill, and the official `bedrock-tricore` CLI. Adds `docs/versions/` release vault; 14 tests pass. No benchmark result changed; V4–V13 historical records remain intact.
 >
-> **1.6.3 发布说明。** 新增原生 O(1) 状态 `TriCoreLM.generate()` 自回归生成、`TriCoreLM.inspect_telemetry()` 突触遥测探针，以及 220 DPI 矢量架构蓝图；基准结果未改变，V4–V13 历史记录完整保留。
+> **1.6.4 发布说明。** 新增带状态分块预填充 `forward_chunked`、带 SHA-256 的 FP32/BF16 17 KiB 状态快照、分块 `generate()` 预填充与官方 `bedrock-tricore` CLI；新增 `docs/versions/` 版本档案库，14 项测试通过。基准结果未改变，V4–V13 历史记录完整保留。
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/tricore_vs_transformer.png" alt="Bedrock-TriCore V13 six-panel panorama: mutation accuracy, static/hot retention, stale confusion, 1M-token memory, decode latency, and multi-hop depth" width="100%">
@@ -44,7 +45,7 @@
 
 ## Part I: English Flagship Specification
 
-> **Reading contract.** Part I is the current, self-contained technical specification for `bedrock-tricore` v1.6.3. Part II is its full Chinese counterpart. Part III is an append-only archive: every V4–V13 release note, table, correction, and self-audit is preserved verbatim so that no historical claim is silently rewritten. Where an older section and this specification disagree, the newer measured result and its stated scope govern.
+> **Reading contract.** Part I is the current, self-contained technical specification for `bedrock-tricore` v1.6.4. Part II is its full Chinese counterpart. Part III is an append-only archive: every V4–V13 release note, table, correction, and self-audit is preserved verbatim so that no historical claim is silently rewritten. Where an older section and this specification disagree, the newer measured result and its stated scope govern.
 
 ### Contents of Part I
 
@@ -516,7 +517,7 @@ bedrock-tricore/
 ├── run_v13_definitive.py        # V13 resumable Delta/Hebbian/Fair/Transformer
 ├── demo_showcase.py             # one-command streaming demo, no checkpoint
 ├── requirements.txt             # torch, numpy, matplotlib
-├── pyproject.toml               # installable bedrock-tricore 1.6.3, MIT
+├── pyproject.toml               # installable bedrock-tricore 1.6.4, MIT
 ├── LICENSE                      # MIT
 ├── .gitignore                   # caches, venvs, checkpoints; keeps reports/PNGs
 ├── SPEC.md                      # original operator specification
@@ -525,7 +526,7 @@ bedrock-tricore/
 └── README.md                    # this bilingual flagship document
 ```
 
-The import package is `tricore`; the distribution name is `bedrock-tricore`. `pyproject.toml` declares `bedrock-tricore==1.6.3`, Python `>=3.10`, and runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`.
+The import package is `tricore`; the distribution name is `bedrock-tricore`. `pyproject.toml` declares `bedrock-tricore==1.6.4`, Python `>=3.10`, and runtime dependencies `torch>=2.0`, `numpy>=1.24`, `matplotlib>=3.7`.
 
 ---
 
@@ -545,7 +546,7 @@ python -m pip install -e .
 # Runtime dependencies only
 python -m pip install -r requirements.txt
 
-# Full unit-test suite (12 tests)
+# Full unit-test suite (14 tests)
 python -m pytest -q
 ```
 
@@ -647,6 +648,18 @@ probe = model.inspect_telemetry(prompt)
 ```
 
 ```python
+# ---- B3. v1.6.4 chunked prefill + 17 KiB snapshots + CLI ----
+chunk_logits, chunk_surprise, chunk_states = model.forward_chunked(
+    prompt, chunk_size=7, return_states=True
+)
+snapshot = model.save_state_snapshot(chunk_states, compress_bf16=True)
+restored = model.load_state_snapshot(snapshot, dtype=torch.float32)
+# snapshot["state_bytes_per_sample"]: 8,704 (BF16); FP32: 17,408
+# snapshot["sha256"]: 64-char integrity checksum
+```
+Run `bedrock-tricore verify` or `python -m tricore verify` to check all invariants.
+
+```python
 # ---- C. Zero-prior V13 model (no token-ID role prior) ----
 v13 = TriCoreLM(
     vocab_size=64,
@@ -696,7 +709,7 @@ The task generators are intentionally small and explicit. A batch is a tensor pa
 
 `run_experiment.py` writes `results/BENCHMARK_REPORT.md` and the earlier four-panel figure. `run_v11_flagship.py` and `run_v12_apex.py` write their own metrics and figures. Generated files should never be hand-edited and then described as run output; rerun the script.
 
-Verification suite: **12 tests pass** with `python -m pytest -q`. Coverage includes:
+Verification suite: **14 tests pass** with `python -m pytest -q`. Coverage includes:
 
 1. forward/backward shapes and gradient flow;
 2. JIT scan versus explicit Python reference for all-engine, single-engine ablations, and all-disabled configurations;
@@ -750,7 +763,7 @@ Bedrock-TriCore is best understood as a **controlled demonstration of a design t
 
 ## Part II: 中文旗舰技术白皮书（完整版）
 
-> **阅读契约。** 本部分是 `bedrock-tricore` v1.6.3 当前、自洽、完整的中文技术规范，与 Part I 英文旗舰版逐章对等。Part III 是只追加、不覆盖的历史档案：V4 至 V13 的每一份发布记录、表格、修正与自我审计都原样保留，任何旧结论都不会被静默改写。若旧章节与本文冲突，以更新的实测结果及其明确声明的适用范围为准。
+> **阅读契约。** 本部分是 `bedrock-tricore` v1.6.4 当前、自洽、完整的中文技术规范，与 Part I 英文旗舰版逐章对等。Part III 是只追加、不覆盖的历史档案：V4 至 V13 的每一份发布记录、表格、修正与自我审计都原样保留，任何旧结论都不会被静默改写。若旧章节与本文冲突，以更新的实测结果及其明确声明的适用范围为准。
 
 ### 本部分目录
 
@@ -1222,7 +1235,7 @@ bedrock-tricore/
 ├── run_v13_definitive.py        # V13 可续跑 Delta/Hebbian/Fair/Transformer
 ├── demo_showcase.py             # 一条命令的流式演示，无需 checkpoint
 ├── requirements.txt             # torch、numpy、matplotlib
-├── pyproject.toml               # 可安装 bedrock-tricore 1.6.3，MIT
+├── pyproject.toml               # 可安装 bedrock-tricore 1.6.4，MIT
 ├── LICENSE                      # MIT
 ├── .gitignore                   # 缓存、虚拟环境、checkpoint；保留报告/PNG
 ├── SPEC.md                      # 原始算子规范
@@ -1231,7 +1244,7 @@ bedrock-tricore/
 └── README.md                    # 本双语旗舰文档
 ```
 
-导入包名为 `tricore`，分发名为 `bedrock-tricore`。`pyproject.toml` 声明 `bedrock-tricore==1.6.3`、Python `>=3.10`，运行依赖 `torch>=2.0`、`numpy>=1.24`、`matplotlib>=3.7`。
+导入包名为 `tricore`，分发名为 `bedrock-tricore`。`pyproject.toml` 声明 `bedrock-tricore==1.6.4`、Python `>=3.10`，运行依赖 `torch>=2.0`、`numpy>=1.24`、`matplotlib>=3.7`。
 
 ---
 
@@ -1246,7 +1259,7 @@ python -m pip install -e .
 # 仅安装运行依赖
 python -m pip install -r requirements.txt
 
-# 完整单元测试（11 项）
+# 完整单元测试（14 项）
 python -m pytest -q
 ```
 
@@ -1348,6 +1361,18 @@ probe = model.inspect_telemetry(prompt)
 ```
 
 ```python
+# ---- B3. v1.6.4 分块预填充 + 17 KiB 快照 + CLI ----
+chunk_logits, chunk_surprise, chunk_states = model.forward_chunked(
+    prompt, chunk_size=7, return_states=True
+)
+snapshot = model.save_state_snapshot(chunk_states, compress_bf16=True)
+restored = model.load_state_snapshot(snapshot, dtype=torch.float32)
+# snapshot["state_bytes_per_sample"]: 8,704（BF16）；FP32: 17,408
+# snapshot["sha256"]: 64 位完整性校验和
+```
+运行 `bedrock-tricore verify` 或 `python -m tricore verify` 检查全部不变量。
+
+```python
 # ---- C. 零先验 V13 模型（不提供 Token-ID 角色先验） ----
 v13 = TriCoreLM(
     vocab_size=64,
@@ -1397,7 +1422,7 @@ sample_train_batch, iter_val_batches, vocab_size = load_real_python_corpus_batch
 
 `run_experiment.py` 写出 `results/BENCHMARK_REPORT.md` 与更早的四面板图。`run_v11_flagship.py` 与 `run_v12_apex.py` 各自写出指标与图。生成文件绝不应手动修改后再声称是运行结果；请重跑脚本。
 
-验证套件：`python -m pytest -q` 为 **12 项全部通过**。覆盖：
+验证套件：`python -m pytest -q` 为 **14 项全部通过**。覆盖：
 
 1. 前向/反向形状与梯度流；
 2. JIT 扫描对显式 Python 参考，覆盖全引擎、单引擎消融、全关闭；
@@ -1406,7 +1431,9 @@ sample_train_batch, iter_val_batches, vocab_size = load_real_python_corpus_batch
 5. 多个长度上恒定的 17,408 字节状态；
 6. 三跳与真实语料梯度；
 7. 分隔符重置的流式一致性；
-8. v1.6.3 的 `generate()` 形状/状态与 `inspect_telemetry()` 键/形状契约。
+8. v1.6.4 的 `generate()` 形状/状态与 `inspect_telemetry()` 键/形状契约；
+9. v1.6.4 的 `forward_chunked()` 对逐 Token 的 logits/surprise/最终状态严格等价；
+10. v1.6.4 的 FP32/BF16 快照字节账本、SHA-256、热恢复与 CLI `verify` 返回码。
 
 ---
 
@@ -1635,7 +1662,7 @@ variance check, not a significance test.
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![TorchScript](https://img.shields.io/badge/TorchScript-JIT%20fused-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/docs/stable/jit.html)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-12%20passing-brightgreen)](#8-verification)
+[![Tests](https://img.shields.io/badge/tests-14%20passing-brightgreen)](#8-verification)
 [![V12](https://img.shields.io/badge/V12-zero--prior%20%2B%201M%20CUDA-blue)](#v12-v150--zero-prior-autonomous-syntax-delta-rule-mutation-and-1048576-token-cuda-profiling)
 
 > **Status:** experimental research reference; **V12** adds zero-prior autonomous syntax discovery, a selectable Delta rule, stateful live-overwrite evaluation, and real CUDA profiling to `L=1,048,576`. The V10 synaptic eligibility trace remains the operator core, the V9 zero-`F_seq` training path remains intact, and all V6/V7/V8/V9/V10/V11 records are preserved. Read [Limitations](#9-limitations) before generalizing.
@@ -2220,7 +2247,7 @@ python tests/test_v7_streaming.py
 5. The V12 parity test exercises `enable_delta_rule` in both states and confirms that the Delta erase term changes the output.
 6. The V12 zero-prior discovery test verifies the exact Track 5 and Track 7 EQ/SEMI masks, then repeats the discovery after a random bijection of all 64 vocabulary IDs and requires bit-identical masks.
 
-The suite currently reports **12 passing tests**: the sanity test, four V5 JIT/bytecode/eligibility tests, four V7/V11 streaming and recall tests, the V12 Delta-rule parity test, the V12 zero-prior mask-discovery test (including an arbitrary vocabulary permutation), and the v1.6.3 generate()/inspect_telemetry() test.
+The suite currently reports **14 passing tests**: the sanity test, four V5 JIT/bytecode/eligibility tests, four V7/V11 streaming and recall tests, the V12 Delta-rule parity test, the V12 zero-prior mask-discovery test (including an arbitrary vocabulary permutation), and the v1.6.4 generate()/inspect_telemetry() test, and the two v1.6.4 chunked/snapshot/CLI tests.
 
 ### 8.3 Full run
 

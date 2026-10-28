@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bedrock-tricore"
-version = "1.6.3"
+version = "1.6.4"
 description = "Bedrock-TriCore: An Attention-Free, Constant-State O(1) Sequence Operator (17.00 KiB) with Causal Delta-Rule Fast Weights and Latent Multi-Hop Chaining"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,6 +32,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4"]
+
+[project.scripts]
+bedrock-tricore = "tricore.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Liangchenxu/bedrock-tricore"

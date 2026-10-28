@@ -1,6 +1,8 @@
 # TriCore V13 — Architecture Specification and Benchmark Record
 
-> **Current package release:** `bedrock-tricore` v1.6.3. This release adds native O(1) autoregressive `generate()`, `inspect_telemetry()`, and a 220-DPI architecture blueprint. The V13 architecture and benchmark record below is unchanged and preserved.
+> **Current package release:** `bedrock-tricore` v1.6.4. This release adds stateful chunked prefill (`forward_chunked`), FP32/BF16 17 KiB state snapshots, chunked `generate()` prefill, and the official CLI. The V13 architecture and benchmark record below is unchanged and preserved.
+>
+> **Version vault:** [docs/versions/INDEX.md](https://github.com/Liangchenxu/bedrock-tricore/blob/main/docs/versions/INDEX.md)
 <!-- V13_RELEASE_SECTION -->
 ## V13 (v1.6.0) — Static Long-Term Bindings, Four-Round Hot Mutation, and the Decay-Interference Dilemma
 
@@ -886,7 +888,7 @@ All three outputs (`h_seq`, `mem_seq`, `surprise_trace`) must satisfy `torch.all
 3. `generate_3hop_recall_batch` shapes/targets and the real Python corpus loader support a finite gradient backward pass.
 4. `generate_4hop_recall_batch` produces shape `(4, 68)` with 16 valid targets; the V11 model uses `reset_trace_tokens=(0,)`; finite gradients and full-vs-`forward_step` parity are checked at `atol=1e-4`.
 
-The complete suite currently reports **12 passing tests**. `run_v7_benchmark.py` regenerates only the V7 streaming and Track 3 sections; it preserves the V6 Track 1/Track 2 tables in `results/BENCHMARK_REPORT.md`. V12 adds the Delta-rule on/off parity test and a zero-prior mask test that compares the exact Track 5/Track 7 EQ/SEMI masks before and after a random bijection of all 64 vocabulary IDs. v1.6.3 adds the native `generate()` shape/state test and the `inspect_telemetry()` key/shape contract test.
+The complete suite currently reports **14 passing tests**. `run_v7_benchmark.py` regenerates only the V7 streaming and Track 3 sections; it preserves the V6 Track 1/Track 2 tables in `results/BENCHMARK_REPORT.md`. V12 adds the Delta-rule on/off parity test and a zero-prior mask test that compares the exact Track 5/Track 7 EQ/SEMI masks before and after a random bijection of all 64 vocabulary IDs. v1.6.4 adds the native `generate()` shape/state test and the `inspect_telemetry()` key/shape contract test. v1.6.4 adds the `forward_chunked()` equivalence test and the state-snapshot/CLI test.
 
 V9 adds no new parameter names. `run_v9_verification.py` exercises the zero-`F_seq` training path under three seeds and writes `results/V9_METRICS.json`; `demo_showcase.py` exercises `init_state` / `forward_step` end to end. Track 4A is a 4-chain, five-way, 3-seed rerun, and Track 4B is a real CUDA allocation/latency measurement through `L=32,768`, both reported in sections 7.8-7.9. V11 adds no trainable parameters, writes `results/V11_METRICS.json`, and extends the measured protocol to 128K; its tests and numbers are in sections 7.10 and 8.3.
 

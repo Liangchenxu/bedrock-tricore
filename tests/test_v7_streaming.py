@@ -3,6 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import pytest
 import torch
 import torch.nn.functional as F
 
@@ -419,6 +420,98 @@ def test_v163_generate_and_telemetry():
     assert model.training is False
 
 
+def test_v164_chunked_prefill_equivalence():
+    torch.manual_seed(43)
+    device = torch.device("cpu")
+    model = TriCoreLM(
+        vocab_size=64,
+        d_model=128,
+        n_layers=1,
+        d_fast=32,
+        max_loops=2,
+    ).to(device)
+    model.eval()
+    idx = torch.randint(0, 64, (2, 37), device=device)
+
+    with torch.no_grad():
+        chunk_logits, chunk_surprise, chunk_states = model.forward_chunked(
+            idx, chunk_size=7, return_states=True
+        )
+        step_states = model.init_state(2, device, torch.float32)
+        step_logits = []
+        step_surprises = []
+        for t in range(idx.shape[1]):
+            logits_t, surprise_t, step_states = model.forward_step(
+                idx[:, t], step_states, t
+            )
+            step_logits.append(logits_t)
+            step_surprises.append(surprise_t)
+        step_logits = torch.stack(step_logits, dim=1)
+        step_surprises = torch.stack(step_surprises, dim=1)
+
+    assert chunk_logits.shape == step_logits.shape == (2, 37, 64)
+    assert chunk_surprise.shape == step_surprises.shape == (2, 37)
+    assert torch.allclose(chunk_logits, step_logits, atol=1e-5, rtol=1e-5)
+    assert torch.allclose(chunk_surprise, step_surprises, atol=1e-5, rtol=1e-5)
+    for chunk_layer, step_layer in zip(chunk_states, step_states):
+        for chunk_tensor, step_tensor in zip(chunk_layer, step_layer):
+            assert torch.allclose(chunk_tensor, step_tensor, atol=1e-5, rtol=1e-5)
+
+
+def test_v164_state_snapshot_and_cli(tmp_path):
+    torch.manual_seed(47)
+    device = torch.device("cpu")
+    model = TriCoreLM(
+        vocab_size=64,
+        d_model=128,
+        n_layers=1,
+        d_fast=32,
+        max_loops=2,
+    ).to(device)
+    model.eval()
+    idx = torch.randint(0, 64, (2, 13), device=device)
+
+    with torch.no_grad():
+        states = model.init_state(2, device, torch.float32)
+        for t in range(idx.shape[1]):
+            _, _, states = model.forward_step(idx[:, t], states, t)
+
+        fp32_snapshot = model.save_state_snapshot(states)
+        bf16_snapshot = model.save_state_snapshot(states, compress_bf16=True)
+        assert fp32_snapshot["state_bytes_per_sample"] == 17_408
+        assert bf16_snapshot["state_bytes_per_sample"] == 8_704
+        assert len(fp32_snapshot["sha256"]) == 64
+
+        path = tmp_path / "tricore_state.pt"
+        model.save_state_snapshot(states, path=path)
+        assert path.exists()
+        loaded = model.load_state_snapshot(path)
+        for original_layer, loaded_layer in zip(states, loaded):
+            for original_tensor, loaded_tensor in zip(original_layer, loaded_layer):
+                assert torch.allclose(original_tensor, loaded_tensor, atol=1e-6)
+
+        next_tokens = torch.tensor([5, 6], device=device)
+        logits_a, surprise_a, _ = model.forward_step(next_tokens, states, 13)
+        logits_b, surprise_b, _ = model.forward_step(next_tokens, loaded, 13)
+        assert torch.allclose(logits_a, logits_b, atol=1e-5, rtol=1e-5)
+        assert torch.allclose(surprise_a, surprise_b, atol=1e-5, rtol=1e-5)
+
+        loaded_bf16 = model.load_state_snapshot(bf16_snapshot)
+        assert len(loaded_bf16) == len(states)
+        for original_layer, loaded_layer in zip(states, loaded_bf16):
+            for original_tensor, loaded_tensor in zip(original_layer, loaded_layer):
+                assert torch.allclose(original_tensor, loaded_tensor, atol=1e-2, rtol=1e-2)
+
+        corrupted = dict(fp32_snapshot)
+        corrupted["sha256"] = "0" * 64
+        with pytest.raises(ValueError):
+            model.load_state_snapshot(corrupted)
+
+    from tricore.cli import main
+
+    assert main(["verify"]) == 0
+
+
 if __name__ == "__main__":
     test_streaming_forward_step_matches_full_forward()
     test_streaming_state_is_constant_17_kib_per_sample()
@@ -427,6 +520,8 @@ if __name__ == "__main__":
     test_v12_autonomous_and_delta_rule_parity()
     test_autonomous_masks_use_frequency_not_token_ids()
     test_v163_generate_and_telemetry()
+    test_v164_chunked_prefill_equivalence()
+    test_v164_state_snapshot_and_cli()
     print(
         "[PASS] V7 streaming, O(1) state, 3-hop, 4-hop, V12 Delta-rule and "
         "Track 7 mutation checks passed."
