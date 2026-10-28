@@ -13,6 +13,7 @@
 </div>
 
 <p align="center">
+  <a href="https://github.com/Liangchenxu/bedrock-tricore/actions/workflows/publish-pypi.yml"><img alt="Publish Pipeline" src="https://github.com/Liangchenxu/bedrock-tricore/actions/workflows/publish-pypi.yml/badge.svg"></a>
   <a href="https://pypi.org/project/bedrock-tricore/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/bedrock-tricore?color=blue&logo=pypi&logoColor=white"></a>
   <a href="https://github.com/Liangchenxu/bedrock-tricore"><img alt="GitHub Repo" src="https://img.shields.io/badge/GitHub-Liangchenxu%2Fbedrock--tricore-181717?logo=github"></a>
   <a href="https://www.python.org/"><img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white"></a>

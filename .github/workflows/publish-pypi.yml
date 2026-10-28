@@ -1,0 +1,92 @@
+name: Publish to PyPI & GitHub Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test-build-publish:
+    name: Verify, Build & Publish (PyPI + GitHub Release)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies & package in editable mode
+        run: |
+          python -m pip install --upgrade pip build twine pytest
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
+          python -m pip install -e .
+
+      - name: Run unit test suite & CLI invariant verification
+        run: |
+          python -m pytest -q
+          python -m tricore verify
+
+      - name: Verify tag matches pyproject.toml version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python -c "
+          import os, pathlib, re, sys
+          tag = os.environ['GITHUB_REF_NAME'].lstrip('v')
+          txt = pathlib.Path('pyproject.toml').read_text(encoding='utf-8')
+          m = re.search(r'^version\s*=\s*\"([^\"]+)\"', txt, flags=re.M)
+          pkg_ver = m.group(1) if m else ''
+          print(f'Tag version: {tag} | pyproject.toml version: {pkg_ver}')
+          if tag != pkg_ver:
+              sys.exit(f'ERROR: Tag v{tag} does not match pyproject.toml version {pkg_ver}!')
+          "
+
+      - name: Build wheel and sdist distributions
+        run: |
+          rm -rf dist build *.egg-info
+          python -m build
+          python -m twine check dist/*
+
+      - name: Publish distributions to PyPI via PYPI_API_TOKEN
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -z "$TWINE_PASSWORD" ]; then
+            echo "ERROR: PYPI_API_TOKEN secret is not set in repository settings!"
+            exit 1
+          fi
+          python -m twine upload dist/* --skip-existing --non-interactive
+
+      - name: Create or update GitHub Release with built assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+          NOTES_FILE="docs/releases/${TAG}.md"
+          if [ ! -f "$NOTES_FILE" ]; then
+            NOTES_FILE="docs/versions/${TAG}.md"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            if [ -f "$NOTES_FILE" ]; then
+              gh release create "$TAG" dist/* --title "Bedrock-TriCore ${TAG}" --notes-file "$NOTES_FILE"
+            else
+              gh release create "$TAG" dist/* --title "Bedrock-TriCore ${TAG}" --generate-notes
+            fi
+          fi
