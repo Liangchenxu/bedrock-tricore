@@ -7,7 +7,7 @@ Each release gets its own file; previous files are never overwritten.
 
 | Version | Engineering record | Commit | Core changes | Typical issue solved |
 | :--- | :--- | :--- | :--- | :--- |
-| **v1.6.4** | [v1.6.4_chunked_snapshot_cli.md](v1.6.4_chunked_snapshot_cli.md) | this release | `forward_chunked()`, FP32/BF16 state snapshots, `bedrock-tricore` CLI, 14 tests | chunk-boundary t=0 write, full-sequence mask slicing, snapshot SHA-256 |
+| **v1.6.4** | [v1.6.4_chunked_snapshot_cli.md](v1.6.4_chunked_snapshot_cli.md) | `de1f2a1` | `forward_chunked()`, FP32/BF16 state snapshots, `bedrock-tricore` CLI, 14 tests | chunk-boundary t=0 write, full-sequence mask slicing, snapshot SHA-256 |
 | **v1.6.3** | [v1.6.3_blueprint_and_telemetry.md](v1.6.3_blueprint_and_telemetry.md) | `0ba497d` | 220-DPI architecture blueprint, `generate()`, `inspect_telemetry()`, 12 tests | ASCII misalignment, missing `_resolve_masks`, gate telemetry drift |
 | **v1.6.2** | [v1.6.2_equation_rendering.md](v1.6.2_equation_rendering.md) | `0f2965c` / `e83d92e` | 8 Computer Modern equation PNGs, Unicode inline formulas, 11 tests | PyPI `nh3` sanitizer / no MathJax, ASCII formula misalignment |
 | **v1.6.1** | [v1.6.1_pypi_packaging.md](v1.6.1_pypi_packaging.md) | `e789762` | `bedrock-tricore` naming, PyPI/GitHub metadata, Unicode formulas, 11 tests | `\operatorname` incompatibility, duplicate-version 403, SecureString token truncation |
