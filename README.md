@@ -7,6 +7,7 @@
     <a href="#part-i-english-flagship-specification"><b>English Flagship Specification (Full)</b></a> •
     <a href="#part-ii-中文旗舰技术白皮书完整版"><b>中文旗舰技术白皮书（完整版）</b></a> •
     <a href="#part-iii-complete-historical-evolution-ledger-v4--v13"><b>Historical Evolution Ledger (V4 → V13)</b></a> •
+    <a href="#release-164"><b>Release 1.6.4 Notes</b></a> •
     <a href="https://github.com/Liangchenxu/bedrock-tricore/blob/main/docs/versions/INDEX.md"><b>Version Vault</b></a>
   </p>
 </div>
@@ -34,6 +35,100 @@
 > **Release 1.6.4.** Adds stateful chunked prefill (`forward_chunked`), FP32/BF16 17 KiB state snapshots with SHA-256, chunked `generate()` prefill, and the official `bedrock-tricore` CLI. Adds `docs/versions/` release vault; 14 tests pass. No benchmark result changed; V4–V13 historical records remain intact.
 >
 > **1.6.4 发布说明。** 新增带状态分块预填充 `forward_chunked`、带 SHA-256 的 FP32/BF16 17 KiB 状态快照、分块 `generate()` 预填充与官方 `bedrock-tricore` CLI；新增 `docs/versions/` 版本档案库，14 项测试通过。基准结果未改变，V4–V13 历史记录完整保留。
+
+<a id="release-164"></a>
+
+## Release 1.6.4 — Stateful Chunking, 17 KiB Snapshots & Official CLI
+
+**Release scope.** v1.6.4 is an infrastructure release. It does not change the model equations, parameter shapes, training protocol, or measured V13 results. It adds three production-facing capabilities around the existing operator: bounded-memory stateful chunking, portable 17 KiB state snapshots, and a first-party CLI.
+
+### What is new
+
+| API / command | What it does | Contract |
+| :--- | :--- | :--- |
+| `TriCoreBlock.forward_with_state(x, state, step_offset, ...)` | Runs a block over one chunk while carrying `(h, F_mat, prev_k)` | A carried state means local `t=0` is a global `t>0`; the Delta/Hebbian write and reset check still execute |
+| `TriCoreLM.forward_chunked(idx, chunk_size=256, states=None, return_states=False)` | Computes masks on the full sequence, slices them per chunk, and carries state layer by layer | `logits`, `surprise`, and final state match stacked `forward_step` within `atol=1e-5` |
+| `TriCoreLM.save_state_snapshot(states, path=None, compress_bf16=False)` | Serializes state plus architecture, dtype, byte ledger, and SHA-256 | FP32 **17,408 B/sample**; BF16 **8,704 B/sample** |
+| `TriCoreLM.load_state_snapshot(snapshot_or_path, device="cpu", dtype=torch.float32)` | Validates format, architecture, layer count, shapes, and SHA-256 before restoring | Restored state can continue through `forward_step`, `forward_chunked`, or `generate` |
+| `TriCoreLM.generate(..., return_telemetry=True)` | Uses chunked state prefill instead of a prompt-length forward pass | Returns generated IDs, surprise trace, and exact persistent-state bytes |
+| `bedrock-tricore info` | Prints version, engine summary, state ledger, PyTorch/CUDA status | No model training required |
+| `bedrock-tricore verify` | Checks the 17 KiB invariant, chunked/step equivalence, snapshot SHA-256, and hot restore | Prints `ALL INVARIANTS VERIFIED` and returns 0 |
+| `bedrock-tricore benchmark --lengths 128 512 2048` | Measures local state bytes and latency | Uses the same O(1) state ledger |
+
+### Chunked stateful prefill
+
+```python
+import torch
+from tricore import TriCoreLM
+
+model = TriCoreLM(
+    vocab_size=64, d_model=128, n_layers=1, d_fast=32, max_loops=2
+).eval()
+prompt = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]])
+
+chunk_logits, chunk_surprise, chunk_states = model.forward_chunked(
+    prompt, chunk_size=64, return_states=True
+)
+# chunk_logits: [1, 8, 64]; chunk_surprise: [1, 8]
+# chunk_states: list of (h, F_mat, prev_k) per layer
+```
+
+The important boundary rule is explicit: a chunk that receives a non-empty state must perform the normal write at its local `t=0`. Only a true sequence start skips the first write. This is what makes `chunk_size` a memory knob rather than a semantic change.
+
+### State snapshots
+
+```python
+snapshot = model.save_state_snapshot(
+    chunk_states, path="tricore_state.pt", compress_bf16=True
+)
+restored = model.load_state_snapshot("tricore_state.pt")
+
+next_logits, next_surprise, next_states = model.forward_step(
+    torch.tensor([7]), restored, prompt.shape[1]
+)
+```
+
+Snapshot schema:
+
+| Key | Meaning |
+| :--- | :--- |
+| `format` | `bedrock-tricore-state-snapshot` |
+| `version` | `1.6.4` |
+| `arch` | vocab size, `d_model`, `n_layers`, `n_heads`, `d_head`, `max_loops` |
+| `dtype` / `compress_bf16` | `float32`/`bfloat16` and the compression flag |
+| `state_bytes` / `state_bytes_per_sample` | Exact tensor bytes and the per-sample ledger |
+| `layers` | Per-layer `(h, F_mat, prev_k)` tensors |
+| `sha256` | Canonical SHA-256 over dtype, shape, and tensor values |
+
+### Official CLI
+
+```bash
+pip install -U bedrock-tricore==1.6.4
+
+bedrock-tricore info
+bedrock-tricore verify
+bedrock-tricore benchmark --lengths 128 512 2048
+
+# equivalent module invocation
+python -m tricore verify
+```
+
+### Verification
+
+- `python -m pytest -q` → **14 passed in 4.48s**
+- `python -m tricore verify` → **ALL INVARIANTS VERIFIED**
+- `forward_chunked(chunk_size=7)` vs stacked `forward_step` → logits, surprise, and final state within `atol=1e-5`
+- Snapshot FP32 → **17,408 B/sample**; BF16 → **8,704 B/sample**
+- Build: wheel **90,899 B**, sdist **235,169 B**; `twine check` both **PASSED**
+- Version vault: [docs/versions/INDEX.md](https://github.com/Liangchenxu/bedrock-tricore/blob/main/docs/versions/INDEX.md)
+
+### 中文摘要
+
+- **分块无损扫描**：`forward_chunked` 在完整序列上计算语法掩码，再按 `chunk_size` 切片；跨分块携带 `(h, F_mat, prev_k)`，边界局部 `t=0` 仍执行写入与 reset。
+- **17 KiB 快照**：`save_state_snapshot` / `load_state_snapshot` 支持 FP32 `17,408 B/sample` 与 BF16 `8,704 B/sample`，包含架构、dtype、字节账本与 SHA-256。
+- **官方 CLI**：`bedrock-tricore info|verify|benchmark`，也可用 `python -m tricore`。
+- **严格验证**：14 项测试全部通过；分块输出、surprise 与最终状态和逐 Token 完全一致；快照恢复后可继续推理。
+- **版本档案**：V4–V13 历史记录完整保留，v1.6.0–v1.6.4 工程复盘见 `docs/versions/`。
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Liangchenxu/bedrock-tricore/main/results/tricore_vs_transformer.png" alt="Bedrock-TriCore V13 six-panel panorama: mutation accuracy, static/hot retention, stale confusion, 1M-token memory, decode latency, and multi-hop depth" width="100%">
